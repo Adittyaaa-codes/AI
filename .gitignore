@@ -6,6 +6,6 @@ dist/
 wheels/
 *.egg-info
 .env
-
+DISCRETE-MATHEMATICS.pdf
 # Virtual environments
 .venv
