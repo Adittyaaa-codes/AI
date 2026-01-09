@@ -47,9 +47,9 @@ def search_web_material(query: str) -> str:
     response = llm.invoke(query)
     return response.content
 
-user_query = input("Enter Your Query : ")
-
-web_search_template = """You are an expert ExplanationAgent that helps explain complex topics.
+web_search_template = """You are an expert ExplanationAgent that helps explain complex topics 
+in most easiest way possible such that a user without any prerequistic knowlegde can 
+understand easily.
 
 Your approach:
 1. ALWAYS start by using the analyze_docs tool to search the uploaded documents for relevant information
@@ -66,10 +66,11 @@ ExplanationAgent = create_agent(
     system_prompt=web_search_template
 )
 
-response = ExplanationAgent.invoke({
-    "messages": [("user", user_query)]
-})
-
-print(response['messages'][-1].content)
+if __name__ == "__main__":
+    user_query = input("Enter Your Query : ")
+    response = ExplanationAgent.invoke({
+        "messages": [("user", user_query)]
+    })
+    print(response['messages'][-1].content)
 
 

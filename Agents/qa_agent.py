@@ -47,8 +47,6 @@ def ques_generator(query:str)->str:
     response = llm.invoke(query)
     return response.content
 
-user_query = input("On which topic you want questions: ")
-
 qa_generator_template = """You are an expert QAGeneratorAgent that helps generate relevant questions.
 
 Your approach:
@@ -66,8 +64,9 @@ QAAgent = create_agent(
     system_prompt=qa_generator_template
 )
 
-response = QAAgent.invoke({
-    "messages": [("user", user_query)]
-})
-
-print(response['messages'][-1].content)
+if __name__ == "__main__":
+    user_query = input("On which topic you want questions: ")
+    response = QAAgent.invoke({
+        "messages": [("user", user_query)]
+    })
+    print(response['messages'][-1].content)
