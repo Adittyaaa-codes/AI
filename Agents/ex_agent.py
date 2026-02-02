@@ -4,6 +4,7 @@ from langchain.tools import tool
 from langchain_openai import OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from dotenv import load_dotenv
+from langchain_tavily import TavilySearch
 import os
 
 
@@ -25,6 +26,7 @@ vector_store = QdrantVectorStore.from_existing_collection(
     embedding=embedding_model,
     url=os.getenv("QDRANT_URL"),
 )
+
 @tool
 def analyze_docs(query: str)->str:
     """Analyze the user query and do similarity search and find relevant chunks"""
@@ -40,13 +42,15 @@ def analyze_docs(query: str)->str:
     
     return context
 
-
 @tool
 def search_web_material(query: str) -> str:
     """Search the web for the best resources available on a topic 
     and extract the informations"""
-    response = llm.invoke(query)
-    return response.content
+    web_search_tool = TavilySearch(
+        api_key=os.getenv("TAVILY_API_KEY"),
+    )
+    return web_search_tool.invoke(query)
+    
 
 web_search_template = """You are an expert ExplanationAgent that helps explain complex topics 
 in most easiest way possible such that a user without any prerequistic knowlegde can 

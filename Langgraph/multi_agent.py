@@ -80,15 +80,13 @@ if __name__ == "__main__":
         user_query = input("Enter your query: ")
         
         print("\n=== Response ===\n")
-        
-        # Token-by-token streaming
-        async for event in app.astream_events(
+
+        async for event in rag_app.astream_events(
             {"messages": [HumanMessage(content=user_query)]},
             version="v2"
         ):
             kind = event["event"]
-            
-            # Stream tokens from LLM
+
             if kind == "on_chat_model_stream":
                 content = event["data"]["chunk"].content
                 if content:
