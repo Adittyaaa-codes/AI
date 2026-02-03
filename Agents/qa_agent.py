@@ -20,7 +20,7 @@ embedding_model = OpenAIEmbeddings(
 )
 
 vector_store = QdrantVectorStore.from_existing_collection(
-    collection_name="discrete-mathematics",
+    collection_name="test-collection",
     embedding=embedding_model,
     url=os.getenv("QDRANT_URL"),
 )
