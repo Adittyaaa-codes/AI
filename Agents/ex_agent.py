@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from langchain_tavily import TavilySearch
 import os
 
+from Utils.utility import embedding_model
 
 load_dotenv()
 
@@ -16,13 +17,9 @@ llm = ChatOpenAI(
     streaming=True,
 )
 
-embedding_model = OpenAIEmbeddings(
-    model="text-embedding-3-small",
-    api_key=os.getenv("OPENAI_API_KEY"),
-)
-
+_default_collection = os.getenv("QDRANT_COLLECTION", "test-collection")
 vector_store = QdrantVectorStore.from_existing_collection(
-    collection_name="test-collection",
+    collection_name=_default_collection,
     embedding=embedding_model,
     url=os.getenv("QDRANT_URL"),
 )
@@ -62,6 +59,7 @@ Your approach:
 3. If the documents don't contain sufficient information, then use search_web_material for additional context
 4. Synthesize the information into clear, simple explanations with examples
 5. Always cite which source you're using (documents or web search)
+6. If neither source contains the answer, respond with "Your query is out of your source materials".
 
 IMPORTANT: Prioritize information from analyze_docs (uploaded documents) over web search."""
 

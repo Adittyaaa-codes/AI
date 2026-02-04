@@ -8,19 +8,17 @@ import os
 
 load_dotenv()
 
+from Utils.utility import embedding_model
+
 llm = ChatOpenAI(
     model="gpt-4o-mini",
     api_key=os.getenv("OPENAI_API_KEY"),
     streaming=True,
 )
 
-embedding_model = OpenAIEmbeddings(
-    model="text-embedding-3-small",
-    api_key=os.getenv("OPENAI_API_KEY"),
-)
-
+_default_collection = os.getenv("QDRANT_COLLECTION", "test-collection")
 vector_store = QdrantVectorStore.from_existing_collection(
-    collection_name="test-collection",
+    collection_name=_default_collection,
     embedding=embedding_model,
     url=os.getenv("QDRANT_URL"),
 )
@@ -48,7 +46,15 @@ def ques_generator(query:str)->str:
     response = llm.invoke(query)
     return response.content
 
-qa_generator_template = """You are an expert QAGeneratorAgent that helps generate relevant questions.
+qa_generator_template = """You are an expert QAGeneratorAgent that helps generate relevant questions by 
+analyzing the context from uploaded documents.
+
+You must prioritize PYQs from the source materials which you get from analyze_docs tool.
+
+You must generate the questions in most simplest way possible such that a user without any prerequistic knowlegde can 
+understand easily.
+
+You must analyze PYQs and Current semester sources for generating questions.
 
 Your approach:
 1. ALWAYS start by using the analyze_docs tool to search the uploaded documents for relevant information

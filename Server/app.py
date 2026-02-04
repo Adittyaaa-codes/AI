@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from qdrant_client import models
+import os, sys, re, tempfile, uuid, uvicorn
 
 from langchain_core.messages import HumanMessage
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
@@ -16,9 +17,17 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 
+import os, sys, re, tempfile, uuid
+from fastapi import Header,Depends, Security
+from fastapi.security import APIKeyHeader
+from qdrant_client import QdrantClient
+from qdrant_client.models import Filter, FieldCondition, MatchValue
+from langchain_core.documents import Document
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from Langgraph.multi_agent import rag_app
+from Utils.utility import get_user_id, collection_name_for,embedding_model
 
 def clean_text(text: str) -> str:
     """Clean PDF text by removing extra whitespace and newlines"""
@@ -29,11 +38,6 @@ def clean_text(text: str) -> str:
     # Fix hyphenated words split across lines
     text = re.sub(r'(\w+)-\s+(\w+)', r'\1\2', text)
     return text.strip()
-
-embedding_model = OpenAIEmbeddings(
-    model="text-embedding-3-small",
-    api_key=os.getenv("OPENAI_API_KEY"),
-)
 
 app = FastAPI(
     title="RAG Multi-Agent API",
@@ -60,70 +64,6 @@ class UploadResponse(BaseModel):
     total_chunks: int
     details: dict
     
-def get_document_loader(file_path: str, file_extension: str):
-    if file_extension == '.pdf':
-        return PyPDFLoader(file_path)
-    else:
-        return TextLoader(file_path, encoding='utf-8')
-
-async def process_uploaded_file(file: UploadFile) -> dict:
-    allowed_extensions = ['.pdf', '.txt', '.md']
-    file_extension = os.path.splitext(file.filename)[1].lower()
-    
-    if file_extension not in allowed_extensions:
-        return {
-            "filename": file.filename,
-            "error": f"Unsupported file type. Allowed: {', '.join(allowed_extensions)}",
-            "status": "failed"
-        }
-    
-    with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
-        contents = await file.read()
-        temp_file.write(contents)
-        temp_file_path = temp_file.name
-    
-    try:
-        loader = get_document_loader(temp_file_path, file_extension)
-        documents = loader.load()
-        
-        for document in documents:
-            document.page_content = clean_text(document.page_content)
-        
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=400
-        )
-        
-        chunks = text_splitter.split_documents(documents)
-        
-        vector_store = QdrantVectorStore.from_documents(
-        documents=chunks,
-        collection_name="test-collection",
-        embedding=embedding_model,
-        url=os.getenv("QDRANT_URL"),
-        )
-        
-        for chunk in chunks:
-            chunk.metadata['source'] = file.filename
-        
-        vector_store.add_documents(documents=chunks)
-        
-        return {
-            "filename": file.filename,
-            "chunks": len(chunks),
-            "status": "success"
-        }
-        
-    except Exception as e:
-        return {
-            "filename": file.filename,
-            "error": str(e),
-            "status": "failed"
-        }
-    
-    finally:
-        if os.path.exists(temp_file_path):
-            os.unlink(temp_file_path)
 
 @app.get("/")
 async def root():
@@ -133,46 +73,72 @@ async def root():
         "version": "1.0.0"
     }
 
-
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "vector_store": "connected",
-        "agents": "ready"
-    }
-
+def _load_file_to_docs(path: str) -> list[Document]:
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".pdf":
+        loader = PyPDFLoader(path)
+        docs = loader.load()
+    else:
+        loader = TextLoader(path, encoding="utf-8")
+        docs = loader.load()
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=150)
+    return splitter.split_documents(docs)
 
 @app.post("/upload_docs", response_model=UploadResponse)
-async def upload_documents(files: List[UploadFile] = File(..., description="PDF, TXT, or MD files")):
-    
-    if not files:
-        raise HTTPException(status_code=400, detail="No files provided")
-    
-    results = []
-    for file in files:
-        result = await process_uploaded_file(file)
-        results.append(result)
-    
-    successful = [r for r in results if r["status"] == "success"]
-    failed = [r for r in results if r["status"] == "failed"]
-    
-    total_chunks = sum(r.get("chunks", 0) for r in successful)
-    
-    return {
-        "message": "Document upload completed",
-        "collection": "test-collection",
-        "processed": len(successful),
-        "failed": len(failed),
-        "total_chunks": total_chunks,
-        "details": {
-            "successful": successful,
-            "failed": failed
-        }
-    }
+async def upload_docs(files: List[UploadFile] = File(...), user_id: str = Depends(get_user_id)):
+    processed, failed, details = 0, 0, {}
+    tmp_paths = []
+    for f in files:
+        try:
+            ext = os.path.splitext(f.filename)[1].lower()
+            if ext not in [".pdf", ".txt", ".md"]:
+                failed += 1
+                details[f.filename] = "unsupported"
+                continue
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                data = await f.read()
+                tmp.write(data)
+                tmp_paths.append((f.filename, tmp.name))
+        except Exception as e:
+            failed += 1
+            details[f.filename] = str(e)
+    all_docs = []
+    for orig, path in tmp_paths:
+        try:
+            docs = _load_file_to_docs(path)
+            for d in docs:
+                meta = d.metadata or {}
+                meta["user_id"] = user_id
+                meta["source_name"] = orig
+                meta["doc_id"] = str(uuid.uuid4())
+                d.metadata = meta
+            all_docs.extend(docs)
+            processed += 1
+        finally:
+            try:
+                os.unlink(path)
+            except:
+                pass
+    if all_docs:
+        QdrantVectorStore.from_documents(
+            documents=all_docs,
+            embedding=embedding_model,
+            url=os.getenv("QDRANT_URL"),
+            api_key=os.getenv("QDRANT_API_KEY"),
+            collection_name=collection_name_for(user_id),
+        )
+    return UploadResponse(
+        message="ok",
+        collection=collection_name_for(user_id),
+        processed=processed,
+        failed=failed,
+        total_chunks=len(all_docs),
+        details=details,
+    )
+
     
 @app.get("/list_docs")
-async def list_documents():
+async def list_documents(user_id: str = Depends(get_user_id)):
     """List all unique source documents in the collection"""
     
     try:
@@ -181,7 +147,7 @@ async def list_documents():
         client = QdrantClient(url=os.getenv("QDRANT_URL"))
         
         records = client.scroll(
-            collection_name="test-collection",
+            collection_name=collection_name_for(user_id),
             limit=1000,
             with_payload=True
         )
@@ -202,44 +168,62 @@ async def list_documents():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/delete_docs")
-async def delete_multiple_documents(filenames: List[str]):
-    """Delete multiple documents by their filenames"""
+@app.delete("/delete_docs/{filename}")
+async def delete_document(
+    filename: str,
+    x_user_id: str = Header(..., alias="X-User-ID")
+):
+    """Delete a single document by filename for a specific user"""
     
-    deleted = []
-    failed = []
-    
-    from qdrant_client import QdrantClient
-    client = QdrantClient(url=os.getenv("QDRANT_URL"))
-    
-    for filename in filenames:
+    try:
+        from qdrant_client import QdrantClient, models
+        
+        client = QdrantClient(url=os.getenv("QDRANT_URL"))
+        collection_name = get_user_collection_name(x_user_id)
+        
         try:
-            result = client.delete(
-                collection_name="test-collection",
-                points_selector=models.FilterSelector(
-                    filter=models.Filter(
-                        must=[
-                            models.FieldCondition(
-                                key="metadata.source",
-                                match=models.MatchValue(value=filename)
-                            )
-                        ]
-                    )
+            client.get_collection(collection_name)
+        except:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Collection not found for user"
+            )
+        
+        result = client.delete(
+            collection_name=collection_name,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="metadata.source",
+                            match=models.MatchValue(value=filename)
+                        )
+                    ]
                 )
             )
-            deleted.append(filename)
-        except Exception as e:
-            failed.append({"filename": filename, "error": str(e)})
-    
-    return {
-        "deleted": deleted,
-        "failed": failed,
-        "total_deleted": len(deleted)
-    }
+        )
+        
+        if result.status == models.UpdateStatus.COMPLETED:
+            return {
+                "success": True,
+                "filename": filename,
+                "collection": collection_name,
+                "message": f"Document '{filename}' deleted successfully"
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Deletion operation did not complete"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/chat")
-async def stream_response(request: ChatRequest):
-    
+async def stream_response(request: ChatRequest, user_id: str = Depends(get_user_id)):
     async def generate():
         try:
             async for event in rag_app.astream_events(
