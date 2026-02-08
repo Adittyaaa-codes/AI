@@ -46,8 +46,22 @@ def ques_generator(query:str)->str:
     response = llm.invoke(query)
     return response.content
 
-qa_generator_template = """You are an expert QAGeneratorAgent that helps generate relevant questions by 
-analyzing the context from uploaded documents.
+def _unwrap_tool(tool_obj):
+    for attr in ("func", "run", "invoke", "__wrapped__"):
+        if hasattr(tool_obj, attr):
+            return getattr(tool_obj, attr)
+    return tool_obj
+
+ques_generator_callable = _unwrap_tool(ques_generator)
+
+qa_generator_template = """You are an expert QAGeneratorAgent that helps generate only relevant questions by 
+analyzing the context from uploaded documents.If the query is about some explaination then you can generate questions based on the context and also provide answers to those questions.
+
+Example:
+User Query: "About Duality Law"
+Your approach: The user is asking about Duality Law, so you will first use the analyze_docs tool to search for relevant information about Duality Law in the uploaded documents and only generate questions based on the context from uploaded documents, do not explain anything about duality law. If the documents don't contain sufficient information about Duality Law, then you can generate questions from web search but you must prioritize questions from uploaded documents first.
+Answer: "Here are some questions based on the context from your uploaded documents about Duality Law:
+1. What is the Duality Law in Boolean algebra?
 
 You must prioritize PYQs from the source materials which you get from analyze_docs tool.
 

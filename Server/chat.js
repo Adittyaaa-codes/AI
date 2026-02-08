@@ -1,7 +1,9 @@
-const response = await fetch('http://localhost:8000/chat', {
+const response = await fetch('http://localhost:8000/chat/qa', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
+    // Required by the API to associate data per user and authorize requests
+    'X-API-Key': 'user123',
   },
   body: JSON.stringify({
     query: 'Is duality law in there with the resource available with you?',

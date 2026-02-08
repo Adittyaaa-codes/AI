@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from qdrant_client import models
 import os, sys, re, tempfile, uuid, uvicorn
+from dotenv import load_dotenv, find_dotenv
 
 from langchain_core.messages import HumanMessage
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
@@ -26,7 +27,10 @@ from langchain_core.documents import Document
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from Langgraph.multi_agent import rag_app
+# Load environment variables from nearest .env file (searches upward)
+load_dotenv(find_dotenv())
+
+from Agents.multi_agent import rag_app_ex, rag_app_qa
 from Utils.utility import get_user_id, collection_name_for,embedding_model
 
 def clean_text(text: str) -> str:
@@ -84,10 +88,21 @@ def _load_file_to_docs(path: str) -> list[Document]:
     splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=150)
     return splitter.split_documents(docs)
 
+def _unique_save_path(base_dir: str, filename: str) -> str:
+    name, ext = os.path.splitext(filename)
+    candidate = os.path.join(base_dir, filename)
+    i = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(base_dir, f"{name} ({i}){ext}")
+        i += 1
+    return candidate
+
 @app.post("/upload_docs", response_model=UploadResponse)
 async def upload_docs(files: List[UploadFile] = File(...), user_id: str = Depends(get_user_id)):
     processed, failed, details = 0, 0, {}
     tmp_paths = []
+    base_dir = os.path.join(os.path.dirname(__file__), "uploads", user_id)
+    os.makedirs(base_dir, exist_ok=True)
     for f in files:
         try:
             ext = os.path.splitext(f.filename)[1].lower()
@@ -95,10 +110,11 @@ async def upload_docs(files: List[UploadFile] = File(...), user_id: str = Depend
                 failed += 1
                 details[f.filename] = "unsupported"
                 continue
-            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                data = await f.read()
-                tmp.write(data)
-                tmp_paths.append((f.filename, tmp.name))
+            save_path = _unique_save_path(base_dir, os.path.basename(f.filename))
+            data = await f.read()
+            with open(save_path, "wb") as out:
+                out.write(data)
+            tmp_paths.append((f.filename, save_path))
         except Exception as e:
             failed += 1
             details[f.filename] = str(e)
@@ -109,16 +125,14 @@ async def upload_docs(files: List[UploadFile] = File(...), user_id: str = Depend
             for d in docs:
                 meta = d.metadata or {}
                 meta["user_id"] = user_id
-                meta["source_name"] = orig
+                meta["source"] = orig
                 meta["doc_id"] = str(uuid.uuid4())
+                meta["file_path"] = path
                 d.metadata = meta
             all_docs.extend(docs)
             processed += 1
         finally:
-            try:
-                os.unlink(path)
-            except:
-                pass
+            pass
     if all_docs:
         QdrantVectorStore.from_documents(
             documents=all_docs,
@@ -171,7 +185,7 @@ async def list_documents(user_id: str = Depends(get_user_id)):
 @app.delete("/delete_docs/{filename}")
 async def delete_document(
     filename: str,
-    x_user_id: str = Header(..., alias="X-User-ID")
+    user_id: str = Depends(get_user_id)
 ):
     """Delete a single document by filename for a specific user"""
     
@@ -179,14 +193,14 @@ async def delete_document(
         from qdrant_client import QdrantClient, models
         
         client = QdrantClient(url=os.getenv("QDRANT_URL"))
-        collection_name = get_user_collection_name(x_user_id)
+        collection_name = collection_name_for(user_id)
         
         try:
             client.get_collection(collection_name)
         except:
             raise HTTPException(
                 status_code=404, 
-                detail=f"Collection not found for user"
+                detail=f"Collection not found for user {user_id}"
             )
         
         result = client.delete(
@@ -222,12 +236,43 @@ async def delete_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/chat")
+@app.post("/chat/qa")
 async def stream_response(request: ChatRequest, user_id: str = Depends(get_user_id)):
     async def generate():
         try:
-            async for event in rag_app.astream_events(
-                {"messages": [HumanMessage(content=request.query)]},
+            async for event in rag_app_qa.astream_events(
+            {
+            "messages": [HumanMessage(content=request.query)],
+            "query": request.query,
+            "user_id": user_id,
+            },
+                version="v2",
+            ):
+                kind = event["event"]
+
+                if kind == "on_chat_model_stream":
+                    content = event["data"]["chunk"].content
+                    if content:
+                        yield content
+        
+        except Exception as e:
+            yield f"\n\nError: {str(e)}"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
+        }
+    )
+    
+@app.post("/chat/explain")
+async def stream_response(request: ChatRequest, user_id: str = Depends(get_user_id)):
+    async def generate():
+        try:
+            async for event in rag_app_ex.astream_events(
+                {"messages": [HumanMessage(content=request.query)], "user_id": user_id, "query": request.query},
                 version="v2"
             ):
                 kind = event["event"]
