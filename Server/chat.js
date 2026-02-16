@@ -2,8 +2,8 @@ const response = await fetch('http://localhost:8000/chat/qa', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
-    // Required by the API to associate data per user and authorize requests
-    'X-API-Key': 'user123',
+    // Provide a Bearer JWT in the AUTH_TOKEN environment variable for local testing
+    ...(process.env.AUTH_TOKEN ? { Authorization: `Bearer ${process.env.AUTH_TOKEN}` } : {}),
   },
   body: JSON.stringify({
     query: 'Is duality law in there with the resource available with you?',
