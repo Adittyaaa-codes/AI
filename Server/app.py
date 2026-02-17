@@ -343,6 +343,105 @@ async def stream_response(request: ChatRequest, user_id: str = Depends(verify_jw
             "X-Accel-Buffering": "no"
         }
     )
+   
+from typing import Optional 
+import yt_dlp
+from youtube_transcript_api import YouTubeTranscriptApi
+    
+class SummaryRequest(BaseModel):
+    youtube_url: str
+    summary_length: Optional[str] = "short"  # "short", "medium", "detailed"
+
+class SummaryResponse(BaseModel):
+    video_title: str
+    video_duration: int
+    summary: str
+    key_points: list[str]
+    keywords: list[str]
+
+@app.post("/summarize", response_model=SummaryResponse)
+async def summarize_video(request: SummaryRequest, user_id: str = Depends(verify_jwt)):
+    try:
+
+        video_id = extract_video_id(request.youtube_url)
+
+        transcript = get_transcript(video_id)
+        if not transcript:
+            raise HTTPException(400, "No transcript available")
+
+        metadata = get_video_metadata(request.youtube_url)
+
+        summary = generate_summary(transcript, metadata["title"], request.summary_length)
+        
+        return SummaryResponse(
+            video_title=metadata["title"],
+            video_duration=metadata["duration"],
+            summary=summary["summary"],
+            key_points=summary["key_points"],
+            keywords=summary["keywords"]
+        )
+        
+    except Exception as e:
+        raise HTTPException(500, f"Summarization failed: {str(e)}")
+
+def extract_video_id(url: str) -> str:
+    """Extract YouTube video ID from URL"""
+    ydl_opts = {'quiet': True}
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        return info['id']
+
+def get_transcript(video_id: str) -> str:
+    """Get YouTube transcript"""
+    try:
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+        return " ".join([t['text'] for t in transcript_list])
+    except:
+        return ""
+
+def get_video_metadata(url: str) -> dict:
+    """Get video title, duration"""
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        return {
+            "title": info.get('title', 'Unknown'),
+            "duration": info.get('duration', 0)
+        }
+
+def generate_summary(transcript: str, title: str, length: str = "short") -> dict:
+    """Generate AI summary using OpenAI/Groq"""
+    
+    prompt = f"""
+    Summarize this YouTube video transcript: "{title}"
+    
+    Transcript: {transcript[:8000]}...  # Truncate for token limits
+    
+    Provide:
+    1. SUMMARY ({length.upper()} version)
+    2. KEY POINTS (bullet list, 5-8 items)
+    3. KEYWORDS (5-10 most important)
+    
+    JSON format only:
+    {{
+      "summary": "...",
+      "key_points": ["point1", "point2"],
+      "keywords": ["kw1", "kw2"]
+    }}
+    """
+    
+    response = openai.ChatCompletion.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        max_tokens=1000
+    )
+    
+    import json
+    return json.loads(response.choices[0].message.content)
 
 
 if __name__ == "__main__":

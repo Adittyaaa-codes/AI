@@ -16,7 +16,7 @@ llm = ChatOpenAI(
     streaming=True,
 )
 
-_default_collection = os.getenv("QDRANT_COLLECTION", "test-collection")
+# _default_collection = os.getenv("QDRANT_COLLECTION", "test-collection")
 vector_store = QdrantVectorStore.from_existing_collection(
     collection_name=_default_collection,
     embedding=embedding_model,

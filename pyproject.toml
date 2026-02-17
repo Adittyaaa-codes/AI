@@ -27,4 +27,6 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "python-multipart>=0.0.22",
     "uvicorn>=0.40.0",
+    "yt-dlp>=2026.2.4",
+    "youtube-transcript-api>=1.2.4",
 ]
