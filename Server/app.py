@@ -4,7 +4,7 @@ import re
 import tempfile
 from typing import List
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import jwt
@@ -59,7 +59,8 @@ app.add_middleware(
 )
 
 class ChatRequest(BaseModel):
-    query: str
+    query: str | None = None
+    messages: list | None = None
     
 class UploadResponse(BaseModel):
     message: str
@@ -286,15 +287,40 @@ async def delete_document(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def _extract_query(payload: dict) -> str | None:
+    msgs = (payload or {}).get("messages") or []
+    for m in reversed(msgs):
+        if m.get("role") != "user":
+            continue
+        parts = m.get("parts")
+        if isinstance(parts, list):
+            texts = [p.get("text") for p in parts if isinstance(p, dict) and p.get("type") == "text" and p.get("text")]
+            if texts:
+                return "".join(texts).strip()
+        content = m.get("content")
+        if isinstance(content, list):
+            texts = [p.get("text") for p in content if isinstance(p, dict) and p.get("type") == "text" and p.get("text")]
+            if texts:
+                return "".join(texts).strip()
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        if isinstance(m.get("text"), str) and m["text"].strip():
+            return m["text"].strip()
+    return None
+
 @app.post("/chat/qa")
-async def stream_response(request: ChatRequest, user_id: str = Depends(verify_jwt)):
+async def stream_response(req: Request):
+    body = await req.json()
+    query = (body or {}).get("query") or _extract_query(body)
+    if not query:
+        raise HTTPException(status_code=400, detail="Missing 'query' in request body")
     async def generate():
         try:
             async for event in rag_app_qa.astream_events(
             {
-            "messages": [HumanMessage(content=request.query)],
-            "query": request.query,
-            "user_id": user_id,
+            "messages": [HumanMessage(content=query)],
+            "query": query,
+            # "user_id": user_id,
             },
                 version="v2",
             ):
@@ -318,11 +344,15 @@ async def stream_response(request: ChatRequest, user_id: str = Depends(verify_jw
     )
     
 @app.post("/chat/explain")
-async def stream_response(request: ChatRequest, user_id: str = Depends(verify_jwt)):
+async def stream_response(request: Request, user_id: str = Depends(verify_jwt)):
+    body = await request.json()
+    query = (body or {}).get("query") or _extract_query(body)
+    if not query:
+        raise HTTPException(status_code=400, detail="Missing 'query' in request body")
     async def generate():
         try:
             async for event in rag_app_ex.astream_events(
-                {"messages": [HumanMessage(content=request.query)], "user_id": user_id, "query": request.query},
+                {"messages": [HumanMessage(content=query)], "user_id": user_id, "query": query},
                 version="v2"
             ):
                 kind = event["event"]
