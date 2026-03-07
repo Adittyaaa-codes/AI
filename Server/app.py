@@ -166,6 +166,8 @@ async def upload_docs(files: List[UploadFile] = File(...), user_id: str = Depend
             for d in docs:
                 meta = d.metadata or {}
                 meta["user_id"] = user_id
+                meta["subject"] = subject
+                meta["chapter"] = chapter or ''
                 meta["source"] = orig
                 meta["doc_id"] = str(uuid.uuid4())
                 meta["file_path"] = path
