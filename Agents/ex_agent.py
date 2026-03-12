@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from langchain_tavily import TavilySearch
 import os
 
-from Utils.utility import embedding_model
+from Utils.utility import embedding_model, get_vector_store_for
 
 load_dotenv()
 
@@ -17,18 +17,11 @@ llm = ChatOpenAI(
     streaming=True,
 )
 
-_default_collection = os.getenv("QDRANT_COLLECTION", "test-collection")
-vector_store = QdrantVectorStore.from_existing_collection(
-    collection_name=_default_collection,
-    embedding=embedding_model,
-    url=os.getenv("QDRANT_URL"),
-)
-
 @tool
 def analyze_docs(query: str)->str:
     """Analyze the user query and do similarity search and find relevant chunks"""
-    
-    docs = vector_store.similarity_search(query=query)
+    vs = get_vector_store_for()
+    docs = vs.similarity_search(query=query)
     if not docs:
         return "No relevant study materials found in your uploaded documents."
     
@@ -75,5 +68,3 @@ if __name__ == "__main__":
         "messages": [("user", user_query)]
     })
     print(response['messages'][-1].content)
-
-

@@ -6,9 +6,9 @@ from langchain_qdrant import QdrantVectorStore
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
+from Utils.utility import embedding_model, get_vector_store_for
 
-from Utils.utility import embedding_model
+load_dotenv()
 
 llm = ChatOpenAI(
     model="gpt-4o-mini",
@@ -16,18 +16,11 @@ llm = ChatOpenAI(
     streaming=True,
 )
 
-_default_collection = os.getenv("QDRANT_COLLECTION", "test-collection")
-vector_store = QdrantVectorStore.from_existing_collection(
-    collection_name=_default_collection,
-    embedding=embedding_model,
-    url=os.getenv("QDRANT_URL"),
-)
-
 @tool
 def analyze_docs(query: str)->str:
     """Analyze the user query and do similarity search and find relevant chunks"""
-    
-    docs = vector_store.similarity_search(query=query)
+    vs = get_vector_store_for()
+    docs = vs.similarity_search(query=query)
     if not docs:
         return "No relevant study materials found in your uploaded documents."
     
@@ -69,6 +62,13 @@ You must generate the questions in most simplest way possible such that a user w
 understand easily.
 
 You must analyze PYQs and Current semester sources for generating questions.
+
+Your approach:
+1. ALWAYS start by using the analyze_docs tool to search the uploaded documents for relevant information
+2. Use the context from analyze_docs to generate the questions and answers for user
+3. If the documents don't contain sufficient information, then generate the questions from web
+4. Synthesize the information into clear, simple answers of questions
+5. Always cite which source you're using (documents or web search)
 
 Your approach:
 1. ALWAYS start by using the analyze_docs tool to search the uploaded documents for relevant information

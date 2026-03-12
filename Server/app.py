@@ -4,7 +4,7 @@ import re
 import tempfile
 from typing import List
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Form
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import jwt
@@ -14,7 +14,7 @@ import os, sys, re, tempfile, uuid, uvicorn
 from dotenv import load_dotenv, find_dotenv
 
 from langchain_core.messages import HumanMessage
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
@@ -32,7 +32,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv(find_dotenv())
 
 from Agents.multi_agent import rag_app_ex, rag_app_qa
-from Utils.utility import get_user_id, collection_name_for,embedding_model
+from Utils.utility import get_user_id, collection_name_for, embedding_model, active_user_id
 
 def clean_text(text: str) -> str:
     """Clean PDF text by removing extra whitespace and newlines"""
@@ -123,6 +123,9 @@ def _load_file_to_docs(path: str) -> list[Document]:
     if ext == ".pdf":
         loader = PyPDFLoader(path)
         docs = loader.load()
+    elif ext in [".docx", ".doc"]:
+        loader = Docx2txtLoader(path)
+        docs = loader.load()
     else:
         loader = TextLoader(path, encoding="utf-8")
         docs = loader.load()
@@ -139,7 +142,13 @@ def _unique_save_path(base_dir: str, filename: str) -> str:
     return candidate
 
 @app.post("/upload_docs", response_model=UploadResponse)
-async def upload_docs(files: List[UploadFile] = File(...), user_id: str = Depends(verify_jwt)):
+async def upload_docs(
+    files: List[UploadFile] = File(...), 
+    subject: str = Form(...),
+    chapter: str = Form(None),
+    user_id: str = Depends(verify_jwt)
+):
+    active_user_id.set(user_id)
     processed, failed, details = 0, 0, {}
     tmp_paths = []
     base_dir = os.path.join(os.path.dirname(__file__), "uploads", user_id)
@@ -147,7 +156,7 @@ async def upload_docs(files: List[UploadFile] = File(...), user_id: str = Depend
     for f in files:
         try:
             ext = os.path.splitext(f.filename)[1].lower()
-            if ext not in [".pdf", ".txt", ".md"]:
+            if ext not in [".pdf", ".txt", ".md", ".docx", ".doc"]:
                 failed += 1
                 details[f.filename] = "unsupported"
                 continue
@@ -163,6 +172,11 @@ async def upload_docs(files: List[UploadFile] = File(...), user_id: str = Depend
     for orig, path in tmp_paths:
         try:
             docs = _load_file_to_docs(path)
+            if not docs:
+                failed += 1
+                details[orig] = "loaded empty docs"
+                continue
+                
             for d in docs:
                 meta = d.metadata or {}
                 meta["user_id"] = user_id
@@ -174,7 +188,12 @@ async def upload_docs(files: List[UploadFile] = File(...), user_id: str = Depend
                 d.metadata = meta
             all_docs.extend(docs)
             processed += 1
+        except Exception as e:
+            failed += 1
+            details[orig] = f"processing error: {str(e)}"
         finally:
+            # Clean up temp file if needed, but we might want to keep it if indexing fails?
+            # For now we'll rely on the backend or a cleanup task.
             pass
     if all_docs:
         QdrantVectorStore.from_documents(
@@ -311,7 +330,8 @@ def _extract_query(payload: dict) -> str | None:
     return None
 
 @app.post("/chat/qa")
-async def stream_response(req: Request):
+async def stream_response(req: Request, user_id: str = Depends(verify_jwt)):
+    active_user_id.set(user_id)
     body = await req.json()
     query = (body or {}).get("query") or _extract_query(body)
     if not query:
@@ -322,7 +342,7 @@ async def stream_response(req: Request):
             {
             "messages": [HumanMessage(content=query)],
             "query": query,
-            # "user_id": user_id,
+            "user_id": user_id,
             },
                 version="v2",
             ):
@@ -347,6 +367,7 @@ async def stream_response(req: Request):
     
 @app.post("/chat/explain")
 async def stream_response(request: Request, user_id: str = Depends(verify_jwt)):
+    active_user_id.set(user_id)
     body = await request.json()
     query = (body or {}).get("query") or _extract_query(body)
     if not query:

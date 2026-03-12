@@ -3,15 +3,24 @@ import os
 from dotenv import load_dotenv
 from langchain_qdrant import QdrantVectorStore
 from openai import OpenAI
+from google import genai
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 load_dotenv()
 
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+openai_client = genai.GenerativeModel("gemini-2.0-flash")
 
-embedding_model = OpenAIEmbeddings(
-    model="text-embedding-3-small",
-    api_key=os.getenv("OPENAI_API_KEY"),
+# embedding_model = OpenAIEmbeddings(
+#     model="text-embedding-3-small",
+#     api_key=os.getenv("OPENAI_API_KEY"),
+# )
+
+embedding_model = GoogleGenerativeAIEmbeddings(
+    model="models/text-embedding-004",
+    google_api_key=os.getenv("GOOGLE_API_KEY")
 )
+
 
 vector_store = QdrantVectorStore.from_existing_collection(
     collection_name="test-collection",

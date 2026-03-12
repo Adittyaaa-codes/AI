@@ -40,7 +40,10 @@ def qa_generation_node(state: AgentState):
             if query:
                 docs = vs.similarity_search(query=query, k=5)
 
-            context = "\n\n".join([d.page_content for d in docs]) if docs else ""
+            context = "\n\n".join([
+                f"Source: {d.metadata.get('source', 'Unknown')}\n{d.page_content}" 
+                for d in docs
+            ]) if docs else ""
 
             messages = list(state.get("messages", []))
             if context:
