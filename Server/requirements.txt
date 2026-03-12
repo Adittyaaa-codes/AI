@@ -11,6 +11,7 @@ langchain-community
 langchain-openai
 langchain-qdrant
 langchain-google-genai
+langchain-tavily
 yt-dlp
 youtube-transcript-api
 docx2txt
