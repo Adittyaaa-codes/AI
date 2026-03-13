@@ -4,7 +4,7 @@ import re
 import tempfile
 from typing import List
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Form, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import jwt
@@ -146,10 +146,13 @@ async def upload_docs(
     files: List[UploadFile] = File(...), 
     subject: str = Form(...),
     chapter: str = Form(None),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     user_id: str = Depends(verify_jwt)
 ):
     active_user_id.set(user_id)
-    processed, failed, details = 0, 0, {}
+    processed: int = 0
+    failed: int = 0
+    details: dict = {}
     tmp_paths = []
     base_dir = os.path.join(os.path.dirname(__file__), "uploads", user_id)
     os.makedirs(base_dir, exist_ok=True)
@@ -178,14 +181,14 @@ async def upload_docs(
                 continue
                 
             for d in docs:
-                meta = d.metadata or {}
-                meta["user_id"] = user_id
-                meta["subject"] = subject
-                meta["chapter"] = chapter or ''
-                meta["source"] = orig
-                meta["doc_id"] = str(uuid.uuid4())
-                meta["file_path"] = path
-                d.metadata = meta
+                if d.metadata is None:
+                    d.metadata = {}
+                d.metadata["user_id"] = user_id
+                d.metadata["subject"] = subject
+                d.metadata["chapter"] = chapter or ''
+                d.metadata["source"] = orig
+                d.metadata["doc_id"] = str(uuid.uuid4())
+                d.metadata["file_path"] = path
             all_docs.extend(docs)
             processed += 1
         except Exception as e:
@@ -196,13 +199,20 @@ async def upload_docs(
             # For now we'll rely on the backend or a cleanup task.
             pass
     if all_docs:
-        QdrantVectorStore.from_documents(
-            documents=all_docs,
-            embedding=embedding_model,
-            url=os.getenv("QDRANT_URL"),
-            api_key=os.getenv("QDRANT_API_KEY"),
-            collection_name=collection_name_for(user_id),
-        )
+        def index_in_background(docs, uid):
+            try:
+                QdrantVectorStore.from_documents(
+                    documents=docs,
+                    embedding=embedding_model,
+                    url=os.getenv("QDRANT_URL"),
+                    api_key=os.getenv("QDRANT_API_KEY"),
+                    collection_name=collection_name_for(uid),
+                )
+                print(f"Successfully indexed {len(docs)} chunks for user {uid}")
+            except Exception as e:
+                print(f"Error in background indexing for user {uid}: {str(e)}")
+
+        background_tasks.add_task(index_in_background, all_docs, user_id)
     return UploadResponse(
         message="ok",
         collection=collection_name_for(user_id),

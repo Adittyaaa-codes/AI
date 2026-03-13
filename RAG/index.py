@@ -22,6 +22,8 @@ file_path = "DISCRETE-MATHEMATICS.pdf"
 loader = PyPDFLoader(file_path)
 doc = loader.load()
 
+print(doc)
+
 # Clean each document's content
 for document in doc:
     document.page_content = clean_text(document.page_content)
