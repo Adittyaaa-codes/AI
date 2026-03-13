@@ -347,12 +347,12 @@ async def stream_response(req: Request, user_id: str = Depends(verify_jwt)):
     if not query:
         raise HTTPException(status_code=400, detail="Missing 'query' in request body")
     async def generate():
+        active_user_id.set(user_id)
+        from Agents.qa_agent import QAAgent
         try:
-            async for event in rag_app_qa.astream_events(
+            async for event in QAAgent.astream_events(
             {
             "messages": [HumanMessage(content=query)],
-            "query": query,
-            "user_id": user_id,
             },
                 version="v2",
             ):
@@ -383,9 +383,11 @@ async def stream_response(request: Request, user_id: str = Depends(verify_jwt)):
     if not query:
         raise HTTPException(status_code=400, detail="Missing 'query' in request body")
     async def generate():
+        active_user_id.set(user_id)
+        from Agents.ex_agent import ExplanationAgent
         try:
-            async for event in rag_app_ex.astream_events(
-                {"messages": [HumanMessage(content=query)], "user_id": user_id, "query": query},
+            async for event in ExplanationAgent.astream_events(
+                {"messages": [HumanMessage(content=query)]},
                 version="v2"
             ):
                 kind = event["event"]
