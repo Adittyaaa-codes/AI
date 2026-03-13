@@ -160,7 +160,7 @@ async def upload_docs(
         try:
             ext = os.path.splitext(f.filename)[1].lower()
             if ext not in [".pdf", ".txt", ".md", ".docx", ".doc"]:
-                failed += 1
+                failed = int(failed) + 1
                 details[f.filename] = "unsupported"
                 continue
             save_path = _unique_save_path(base_dir, os.path.basename(f.filename))
@@ -169,14 +169,14 @@ async def upload_docs(
                 out.write(data)
             tmp_paths.append((f.filename, save_path))
         except Exception as e:
-            failed += 1
+            failed = int(failed) + 1
             details[f.filename] = str(e)
     all_docs = []
     for orig, path in tmp_paths:
         try:
             docs = _load_file_to_docs(path)
             if not docs:
-                failed += 1
+                failed = int(failed) + 1
                 details[orig] = "loaded empty docs"
                 continue
                 
@@ -190,9 +190,9 @@ async def upload_docs(
                 d.metadata["doc_id"] = str(uuid.uuid4())
                 d.metadata["file_path"] = path
             all_docs.extend(docs)
-            processed += 1
+            processed = int(processed) + 1
         except Exception as e:
-            failed += 1
+            failed = int(failed) + 1
             details[orig] = f"processing error: {str(e)}"
         finally:
             # Clean up temp file if needed, but we might want to keep it if indexing fails?
