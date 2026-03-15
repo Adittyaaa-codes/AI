@@ -33,6 +33,41 @@ def analyze_docs(query: str) -> str:
         return f"Could not search documents: {str(e)}. Try using web search instead."
 
 @tool
+def get_available_sources(query: str = "") -> str:
+    """List all original document names/source materials currently stored in the user's library."""
+    try:
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        from Utils.utility import _make_qdrant_client, collection_name_for, active_user_id
+        
+        client = _make_qdrant_client()
+        user_id = active_user_id.get()
+        coll = collection_name_for(user_id)
+        
+        # Scroll through points to collect unique source names
+        records = client.scroll(
+            collection_name=coll,
+            limit=100,
+            with_payload=True,
+            scroll_filter=Filter(
+                must=[FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id))]
+            ) if user_id else None
+        )
+        
+        sources = set()
+        for record in records[0]:
+            if record.payload and 'metadata' in record.payload:
+                source = record.payload['metadata'].get('source')
+                if source:
+                    sources.add(source)
+        
+        if not sources:
+            return "No documents have been uploaded to your library yet."
+        
+        return "The following source materials are available in your library:\n- " + "\n- ".join(list(sources))
+    except Exception as e:
+        return f"Error retrieving source list: {str(e)}"
+
+@tool
 def search_web_material(query: str) -> str:
     """Search the web for the best resources available on a topic and extract the information."""
     try:
@@ -48,18 +83,19 @@ web_search_template = """You are an expert ExplanationAgent that helps explain c
 in the easiest way possible so that a user without any prerequisite knowledge can understand easily.
 
 Your approach:
-1. ALWAYS start by using the analyze_docs tool to search the uploaded documents for relevant information.
-2. Use the context from analyze_docs to answer the user's question accurately.
-3. If the documents don't contain sufficient information, use search_web_material for additional context.
-4. Synthesize the information into clear, simple explanations with examples.
-5. Always cite which source you are using (documents or web search).
-6. If neither source contains the answer, respond with "Your query is out of your source materials".
+1. If the user asks what documents/sources are available, ALWAYS use the get_available_sources tool.
+2. For all other queries, ALWAYS start by using the analyze_docs tool to search the uploaded documents for relevant information.
+3. Use the context from analyze_docs to answer the user's question accurately.
+4. If the documents don't contain sufficient information, use search_web_material for additional context.
+5. Synthesize the information into clear, simple explanations with examples.
+6. Always cite which source you are using (documents or web search).
+7. If neither source contains the answer, respond with "Your query is out of your source materials".
 
 IMPORTANT: Prioritize information from analyze_docs (uploaded documents) over web search."""
 
 ExplanationAgent = create_agent(
     model=llm,
-    tools=[analyze_docs, search_web_material],
+    tools=[analyze_docs, get_available_sources, search_web_material],
     system_prompt=web_search_template
 )
 

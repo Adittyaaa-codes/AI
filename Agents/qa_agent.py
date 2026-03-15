@@ -31,6 +31,41 @@ def analyze_docs(query: str) -> str:
         return f"Could not search documents: {str(e)}. Try generating questions from general knowledge."
 
 @tool
+def get_available_sources(query: str = "") -> str:
+    """List all original document names/source materials currently stored in the user's library."""
+    try:
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        from Utils.utility import _make_qdrant_client, collection_name_for, active_user_id
+        
+        client = _make_qdrant_client()
+        user_id = active_user_id.get()
+        coll = collection_name_for(user_id)
+        
+        # Scroll through points to collect unique source names
+        records = client.scroll(
+            collection_name=coll,
+            limit=100,
+            with_payload=True,
+            scroll_filter=Filter(
+                must=[FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id))]
+            ) if user_id else None
+        )
+        
+        sources = set()
+        for record in records[0]:
+            if record.payload and 'metadata' in record.payload:
+                source = record.payload['metadata'].get('source')
+                if source:
+                    sources.add(source)
+        
+        if not sources:
+            return "No documents have been uploaded to your library yet."
+        
+        return "The following source materials are available in your library:\n- " + "\n- ".join(list(sources))
+    except Exception as e:
+        return f"Error retrieving source list: {str(e)}"
+
+@tool
 def ques_generator(query: str) -> str:
     """Use the context from analyze_docs tool, analyze and create questions for the user and make the user exam-ready."""
     response = llm.invoke(query)
@@ -49,17 +84,18 @@ analyzing the context from uploaded documents. If the query is about some explan
 based on the context and also provide answers to those questions.
 
 Your approach:
-1. ALWAYS start by using the analyze_docs tool to search the uploaded documents for relevant information.
-2. Use the context from analyze_docs to generate the questions and answers for the user.
-3. If the documents don't contain sufficient information, generate the questions from general knowledge.
-4. Synthesize the information into clear, simple answers of questions.
-5. Always cite which source you are using (documents or general knowledge).
+1. If the user asks what documents/sources are available, ALWAYS use the get_available_sources tool.
+2. For all other queries, ALWAYS start by using the analyze_docs tool to search the uploaded documents for relevant information.
+3. Use the context from analyze_docs to generate the questions and answers for the user.
+4. If the documents don't contain sufficient information, generate the questions from general knowledge.
+5. Synthesize the information into clear, simple answers of questions.
+6. Always cite which source you are using (documents or general knowledge).
 
 IMPORTANT: Prioritize information from analyze_docs (uploaded documents) first."""
 
 QAAgent = create_agent(
     model=llm,
-    tools=[analyze_docs, ques_generator],
+    tools=[analyze_docs, get_available_sources, ques_generator],
     system_prompt=qa_generator_template
 )
 
