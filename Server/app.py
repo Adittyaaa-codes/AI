@@ -16,7 +16,7 @@ from dotenv import load_dotenv, find_dotenv
 from langchain_core.messages import HumanMessage
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 
 import os, sys, re, tempfile, uuid
@@ -201,7 +201,7 @@ async def upload_docs(
                     api_key=os.getenv("QDRANT_API_KEY"),
                     collection_name=collection_name_for(uid),
                 )
-                print(f"Successfully indexed {len(docs)} chunks for user {uid}")
+                print(f"✅ Successfully indexed {len(docs)} chunks for user {uid} into collection '{collection_name_for(uid)}'")
             except Exception as e:
                 print(f"Error in background indexing for user {uid}: {str(e)}")
 

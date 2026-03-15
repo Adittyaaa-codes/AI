@@ -4,7 +4,7 @@ import contextvars
 from fastapi import Security
 from fastapi.security import APIKeyHeader
 from langchain_qdrant import QdrantVectorStore
-from langchain_openai import OpenAIEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from qdrant_client import QdrantClient
 from dotenv import load_dotenv
 
@@ -12,9 +12,9 @@ load_dotenv()
 
 active_user_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("active_user_id", default=None)
 
-embedding_model = OpenAIEmbeddings(
-    model="text-embedding-3-small",
-    api_key=os.getenv("OPENAI_API_KEY"),
+embedding_model = GoogleGenerativeAIEmbeddings(
+    model="models/text-embedding-004",
+    google_api_key=os.getenv("GOOGLE_API_KEY"),
 )
 
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=True)

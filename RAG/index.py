@@ -1,6 +1,6 @@
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 import re
 import os
@@ -22,7 +22,7 @@ file_path = "DISCRETE-MATHEMATICS.pdf"
 loader = PyPDFLoader(file_path)
 doc = loader.load()
 
-print(doc)
+print(f"Loaded {len(doc)} pages from PDF")
 
 # Clean each document's content
 for document in doc:
@@ -31,16 +31,20 @@ for document in doc:
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=400)
 chunks = text_splitter.split_documents(doc)
 
-embedding_model = OpenAIEmbeddings(
-    model="text-embedding-3-small",
-    api_key=os.getenv("OPENAI_API_KEY"),
+print(f"Split into {len(chunks)} chunks")
+
+embedding_model = GoogleGenerativeAIEmbeddings(
+    model="models/text-embedding-004",
+    google_api_key=os.getenv("GOOGLE_API_KEY"),
 )
 
+print("Starting indexing with Google Gemini embeddings (768 dimensions)...")
 vector_store = QdrantVectorStore.from_documents(
     documents=chunks,
     collection_name="discrete-mathematics",
     embedding=embedding_model,
     url=os.getenv("QDRANT_URL"),
+    api_key=os.getenv("QDRANT_API_KEY"),
 )
 
-print("Indexing completed.")
+print("✅ Indexing completed successfully.")

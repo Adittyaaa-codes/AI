@@ -34,6 +34,19 @@ def analyze_docs(query: str, config: RunnableConfig) -> str:
             )
             
         docs = vs.similarity_search(query=query, k=4, filter=search_filter)
+        
+        # DEBUG: Log retrieval results
+        print(f"\n[EX-DEBUG] Query: {query}")
+        print(f"[EX-DEBUG] Retrieved {len(docs)} documents from Qdrant")
+        if docs:
+            # Try to get score from metadata or compute it
+            first_score = docs[0].metadata.get('_relevance_score', 'N/A')
+            first_content = docs[0].page_content[:80].replace('\n', ' ')
+            print(f"[EX-DEBUG] First result score: {first_score}")
+            print(f"[EX-DEBUG] First result: {first_content}...")
+        else:
+            print(f"[EX-DEBUG] ⚠️  No results! Collection: {user_id}")
+        
         if not docs:
             return "No relevant study materials found in your uploaded documents."
         context = "\n\n".join([
@@ -42,6 +55,7 @@ def analyze_docs(query: str, config: RunnableConfig) -> str:
         ])
         return context
     except Exception as e:
+        print(f"[EX-DEBUG] Error in analyze_docs: {str(e)}")
         return f"Could not search documents: {str(e)}. Try using web search instead."
 
 @tool
