@@ -5,11 +5,11 @@ from fastapi import Security
 from fastapi.security import APIKeyHeader
 from langchain_qdrant import QdrantVectorStore
 from langchain_openai import OpenAIEmbeddings
+from qdrant_client import QdrantClient
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Global context for the current user ID
 active_user_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("active_user_id", default=None)
 
 embedding_model = OpenAIEmbeddings(
@@ -28,13 +28,19 @@ def collection_name_for(user_id: str | None) -> str:
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", user_id)[:64]
     return f"user_{safe}_docs"
 
-def get_vector_store_for(user_id: str | None = None) -> QdrantVectorStore:
-    # Use provided user_id, or fall back to the context variable
-    effective_user_id = user_id or active_user_id.get()
-    
-    return QdrantVectorStore.from_existing_collection(
-        collection_name=collection_name_for(effective_user_id),
-        embedding=embedding_model,
+def _make_qdrant_client() -> QdrantClient:
+    return QdrantClient(
         url=os.getenv("QDRANT_URL"),
         api_key=os.getenv("QDRANT_API_KEY"),
+        prefer_grpc=False,
+        timeout=20,
+    )
+
+def get_vector_store_for(user_id: str | None = None) -> QdrantVectorStore:
+    effective_user_id = user_id or active_user_id.get()
+    client = _make_qdrant_client()
+    return QdrantVectorStore(
+        client=client,
+        collection_name=collection_name_for(effective_user_id),
+        embedding=embedding_model,
     )
