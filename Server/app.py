@@ -75,11 +75,6 @@ class IndexTextRequest(BaseModel):
     text: str
     doc_id: str | None = None
 
-    
-
-# =====================
-# Auth: Bearer JWT
-# =====================
 auth_scheme = HTTPBearer(auto_error=True)
 
 def verify_jwt(credentials: HTTPAuthorizationCredentials = Security(auth_scheme)) -> str:
@@ -195,8 +190,6 @@ async def upload_docs(
             failed = int(failed) + 1
             details[orig] = f"processing error: {str(e)}"
         finally:
-            # Clean up temp file if needed, but we might want to keep it if indexing fails?
-            # For now we'll rely on the backend or a cleanup task.
             pass
     if all_docs:
         def index_in_background(docs, uid):
@@ -221,12 +214,10 @@ async def upload_docs(
         total_chunks=len(all_docs),
         details=details,
     )
-
-    
+   
 @app.get("/list_docs")
 async def list_documents(user_id: str = Depends(verify_jwt)):
     """List all unique source documents in the collection"""
-    
     try:
         from qdrant_client import QdrantClient
         
@@ -355,6 +346,7 @@ async def stream_response(req: Request, user_id: str = Depends(verify_jwt)):
             "messages": [HumanMessage(content=query)],
             },
                 version="v2",
+                config={"configurable": {"user_id": user_id}},
             ):
                 kind = event["event"]
 
@@ -388,7 +380,8 @@ async def stream_response(request: Request, user_id: str = Depends(verify_jwt)):
         try:
             async for event in ExplanationAgent.astream_events(
                 {"messages": [HumanMessage(content=query)]},
-                version="v2"
+                version="v2",
+                config={"configurable": {"user_id": user_id}},
             ):
                 kind = event["event"]
                 

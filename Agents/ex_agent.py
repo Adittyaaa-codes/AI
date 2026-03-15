@@ -16,12 +16,24 @@ llm = ChatOpenAI(
     streaming=True,
 )
 
+from langchain_core.runnables import RunnableConfig
+from qdrant_client.models import Filter, FieldCondition, MatchValue
+
 @tool
-def analyze_docs(query: str) -> str:
+def analyze_docs(query: str, config: RunnableConfig) -> str:
     """Analyze the user query, do similarity search and find relevant chunks from uploaded documents."""
     try:
-        vs = get_vector_store_for()
-        docs = vs.similarity_search(query=query, k=4)
+        user_id = config.get("configurable", {}).get("user_id")
+        vs = get_vector_store_for(user_id)
+        
+        # Add user_id filter to ensure we only get the current user's documents
+        search_filter = None
+        if user_id:
+            search_filter = Filter(
+                must=[FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id))]
+            )
+            
+        docs = vs.similarity_search(query=query, k=4, filter=search_filter)
         if not docs:
             return "No relevant study materials found in your uploaded documents."
         context = "\n\n".join([
@@ -33,14 +45,14 @@ def analyze_docs(query: str) -> str:
         return f"Could not search documents: {str(e)}. Try using web search instead."
 
 @tool
-def get_available_sources(query: str = "") -> str:
+def get_available_sources(query: str, config: RunnableConfig) -> str:
     """List all original document names/source materials currently stored in the user's library."""
     try:
         from qdrant_client.models import Filter, FieldCondition, MatchValue
-        from Utils.utility import _make_qdrant_client, collection_name_for, active_user_id
+        from Utils.utility import _make_qdrant_client, collection_name_for
         
+        user_id = config.get("configurable", {}).get("user_id")
         client = _make_qdrant_client()
-        user_id = active_user_id.get()
         coll = collection_name_for(user_id)
         
         # Scroll through points to collect unique source names
