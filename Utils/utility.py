@@ -13,7 +13,7 @@ load_dotenv()
 active_user_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("active_user_id", default=None)
 
 embedding_model = GoogleGenerativeAIEmbeddings(
-    model="models/text-embedding-004",
+    model="models/gemini-embedding-001",
     google_api_key=os.getenv("GOOGLE_API_KEY"),
 )
 

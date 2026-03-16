@@ -199,27 +199,27 @@ async def upload_docs(
                 coll = collection_name_for(uid)
                 client = _make_qdrant_client()
 
-                # Google text-embedding-004 produces 768-dim vectors.
+                # models/gemini-embedding-001 produces 3072-dim vectors.
                 # Recreate collection only if it doesn't exist with correct config.
                 existing = [c.name for c in client.get_collections().collections]
                 if coll not in existing:
                     client.create_collection(
                         collection_name=coll,
-                        vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+                        vectors_config=VectorParams(size=3072, distance=Distance.COSINE),
                     )
-                    print(f"[INDEX] Created collection '{coll}' with 768-dim cosine vectors")
+                    print(f"[INDEX] Created collection '{coll}' with 3072-dim cosine vectors")
                 else:
                     info = client.get_collection(coll)
                     existing_size = info.config.params.vectors.size if hasattr(info.config.params.vectors, 'size') else "unknown"
                     print(f"[INDEX] Collection '{coll}' already exists. Vector size: {existing_size}")
-                    if existing_size != 768:
-                        print(f"[INDEX] ⚠️ DIMENSION MISMATCH: expected 768, found {existing_size}. Recreating...")
+                    if existing_size != 3072:
+                        print(f"[INDEX] ⚠️ DIMENSION MISMATCH: expected 3072, found {existing_size}. Recreating...")
                         client.delete_collection(coll)
                         client.create_collection(
                             collection_name=coll,
-                            vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+                            vectors_config=VectorParams(size=3072, distance=Distance.COSINE),
                         )
-                        print(f"[INDEX] Recreated collection '{coll}' with 768-dim vectors")
+                        print(f"[INDEX] Recreated collection '{coll}' with 3072-dim vectors")
 
                 QdrantVectorStore.from_documents(
                     documents=docs,
