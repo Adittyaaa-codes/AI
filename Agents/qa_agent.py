@@ -1,10 +1,12 @@
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain.tools import tool
+from langchain_core.runnables import RunnableConfig
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 from dotenv import load_dotenv
 import os
 
-from Utils.utility import embedding_model, get_vector_store_for
+from Utils.utility import get_vector_store_for
 
 load_dotenv()
 
@@ -14,60 +16,57 @@ llm = ChatOpenAI(
     streaming=True,
 )
 
-from langchain_core.runnables import RunnableConfig
-from qdrant_client.models import Filter, FieldCondition, MatchValue
-
 @tool
 def analyze_docs(query: str, config: RunnableConfig) -> str:
     """Analyze the user query, do similarity search and find relevant chunks from uploaded documents."""
     try:
         user_id = config.get("configurable", {}).get("user_id")
+        print(f"\n[QA-DEBUG] analyze_docs called | user_id={user_id} | query={query[:80]}")
+
         vs = get_vector_store_for(user_id)
-        
-        # Add user_id filter to ensure we only get the current user's documents
+
+        # Filter by user_id to ensure isolation between users
         search_filter = None
         if user_id:
             search_filter = Filter(
                 must=[FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id))]
             )
-            
+
         docs = vs.similarity_search(query=query, k=4, filter=search_filter)
-        
-        # DEBUG: Log retrieval results
-        print(f"\n[QA-DEBUG] Query: {query}")
-        print(f"[QA-DEBUG] Retrieved {len(docs)} documents from Qdrant")
+
+        print(f"[QA-DEBUG] Retrieved {len(docs)} chunks from collection for user_id={user_id}")
         if docs:
-            # Try to get score from metadata or compute it
-            first_score = docs[0].metadata.get('_relevance_score', 'N/A')
-            first_content = docs[0].page_content[:80].replace('\n', ' ')
-            print(f"[QA-DEBUG] First result score: {first_score}")
-            print(f"[QA-DEBUG] First result: {first_content}...")
+            print(f"[QA-DEBUG] Top chunk score (metadata): {docs[0].metadata.get('_relevance_score', 'N/A')}")
+            print(f"[QA-DEBUG] Top chunk payload keys: {list(docs[0].metadata.keys())}")
+            print(f"[QA-DEBUG] Top chunk preview: {docs[0].page_content[:120].replace(chr(10), ' ')}...")
         else:
-            print(f"[QA-DEBUG] ⚠️  No results! Collection: {user_id}")
-        
+            print(f"[QA-DEBUG] ⚠️ 0 results — collection may be empty, wrong name, or filter is too strict.")
+
         if not docs:
             return "No relevant study materials found in your uploaded documents."
+
         context = "\n\n".join([
             f"Source: {doc.metadata.get('source', 'Unknown')}\n{doc.page_content}"
             for doc in docs
         ])
+        print(f"[QA-DEBUG] Context length being sent to LLM: {len(context)} chars")
         return context
+
     except Exception as e:
-        print(f"[QA-DEBUG] Error in analyze_docs: {str(e)}")
+        print(f"[QA-DEBUG] ❌ Error in analyze_docs: {str(e)}")
         return f"Could not search documents: {str(e)}. Try generating questions from general knowledge."
 
 @tool
 def get_available_sources(query: str, config: RunnableConfig) -> str:
     """List all original document names/source materials currently stored in the user's library."""
     try:
-        from qdrant_client.models import Filter, FieldCondition, MatchValue
         from Utils.utility import _make_qdrant_client, collection_name_for
-        
+
         user_id = config.get("configurable", {}).get("user_id")
         client = _make_qdrant_client()
         coll = collection_name_for(user_id)
-        
-        # Scroll through points to collect unique source names
+        print(f"[QA-DEBUG] get_available_sources | collection={coll} | user_id={user_id}")
+
         records = client.scroll(
             collection_name=coll,
             limit=100,
@@ -76,19 +75,23 @@ def get_available_sources(query: str, config: RunnableConfig) -> str:
                 must=[FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id))]
             ) if user_id else None
         )
-        
+
         sources = set()
         for record in records[0]:
             if record.payload and 'metadata' in record.payload:
                 source = record.payload['metadata'].get('source')
                 if source:
                     sources.add(source)
-        
+
+        print(f"[QA-DEBUG] Found {len(sources)} unique sources in collection")
+
         if not sources:
             return "No documents have been uploaded to your library yet."
-        
+
         return "The following source materials are available in your library:\n- " + "\n- ".join(list(sources))
+
     except Exception as e:
+        print(f"[QA-DEBUG] ❌ Error in get_available_sources: {str(e)}")
         return f"Error retrieving source list: {str(e)}"
 
 @tool

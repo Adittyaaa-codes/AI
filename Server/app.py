@@ -193,17 +193,47 @@ async def upload_docs(
             pass
     if all_docs:
         def index_in_background(docs, uid):
+            from Utils.utility import _make_qdrant_client
+            from qdrant_client.models import Distance, VectorParams
             try:
+                coll = collection_name_for(uid)
+                client = _make_qdrant_client()
+
+                # Google text-embedding-004 produces 768-dim vectors.
+                # Recreate collection only if it doesn't exist with correct config.
+                existing = [c.name for c in client.get_collections().collections]
+                if coll not in existing:
+                    client.create_collection(
+                        collection_name=coll,
+                        vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+                    )
+                    print(f"[INDEX] Created collection '{coll}' with 768-dim cosine vectors")
+                else:
+                    info = client.get_collection(coll)
+                    existing_size = info.config.params.vectors.size if hasattr(info.config.params.vectors, 'size') else "unknown"
+                    print(f"[INDEX] Collection '{coll}' already exists. Vector size: {existing_size}")
+                    if existing_size != 768:
+                        print(f"[INDEX] ⚠️ DIMENSION MISMATCH: expected 768, found {existing_size}. Recreating...")
+                        client.delete_collection(coll)
+                        client.create_collection(
+                            collection_name=coll,
+                            vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+                        )
+                        print(f"[INDEX] Recreated collection '{coll}' with 768-dim vectors")
+
                 QdrantVectorStore.from_documents(
                     documents=docs,
                     embedding=embedding_model,
                     url=os.getenv("QDRANT_URL"),
                     api_key=os.getenv("QDRANT_API_KEY"),
-                    collection_name=collection_name_for(uid),
+                    collection_name=coll,
+                    prefer_grpc=False,
                 )
-                print(f"✅ Successfully indexed {len(docs)} chunks for user {uid} into collection '{collection_name_for(uid)}'")
+                print(f"✅ Successfully indexed {len(docs)} chunks for user {uid} into collection '{coll}'")
             except Exception as e:
-                print(f"Error in background indexing for user {uid}: {str(e)}")
+                import traceback
+                print(f"❌ Error in background indexing for user {uid}: {str(e)}")
+                traceback.print_exc()
 
         background_tasks.add_task(index_in_background, all_docs, user_id)
     return UploadResponse(

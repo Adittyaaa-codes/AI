@@ -17,7 +17,11 @@ class AgentState(TypedDict, total=False):
     user_id: str
 
 def explanation_node(state: AgentState):
-    result = ExplanationAgent.invoke(state)
+    user_id = state.get("user_id")
+    result = ExplanationAgent.invoke(
+        state,
+        config={"configurable": {"user_id": user_id}},
+    )
     return {"messages": result["messages"]}
 
 def qa_generation_node(state: AgentState):
