@@ -1,32 +1,32 @@
 import os
+import sys
 from dotenv import load_dotenv
 from langchain_qdrant import QdrantVectorStore
-from google import genai
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+# Ensure we can import from Utils
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from Utils.utility import embedding_model, _make_qdrant_client
 
 load_dotenv()
 
+from google import generativeai as genai
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 llm_model = genai.GenerativeModel("gemini-2.0-flash")
-
-embedding_model = GoogleGenerativeAIEmbeddings(
-    model="models/text-embedding-004",
-    google_api_key=os.getenv("GOOGLE_API_KEY")
-)
 
 print("Connecting to Qdrant at:", os.getenv("QDRANT_URL"))
 print("Collection: discrete-mathematics")
 
-vector_store = QdrantVectorStore.from_existing_collection(
+client = _make_qdrant_client()
+vector_store = QdrantVectorStore(
+    client=client,
     collection_name="discrete-mathematics",
     embedding=embedding_model,
-    url=os.getenv("QDRANT_URL"),
-    api_key=os.getenv("QDRANT_API_KEY"),
 )
 
 user_query = "Explain duality law and tell the page number in the book where it is explained."
 
 print(f"\n🔍 Querying Qdrant for: {user_query}")
+# Using the embedding_model wrapper which internally uses task_type="retrieval_query" for searches
 retrieved_docs = vector_store.similarity_search(
     query=user_query,
     k=3
@@ -35,12 +35,12 @@ retrieved_docs = vector_store.similarity_search(
 # DEBUG: Log retrieval results
 print(f"\n✅ Retrieved {len(retrieved_docs)} documents")
 if retrieved_docs:
-    print(f"   Score of first result: {retrieved_docs[0].metadata.get('_relevance_score', 'N/A')}")
+    # Note: similarity_search might not return score in metadata by default unless using similarity_search_with_score
     print(f"   First result preview: {retrieved_docs[0].page_content[:100]}...")
 else:
     print("   ⚠️  WARNING: No documents retrieved! Check:")
     print("     - Qdrant connection and collection name")
-    print("     - Embedding model dimensions match")
+    print("     - Embedding model dimensions match (should be 768)")
     print("     - Collection is not empty")
 
 context = [result.page_content for result in retrieved_docs]
@@ -56,4 +56,4 @@ response = llm_model.generate_content(
     SYSTEM_PROMPT.format(context='\n\n'.join(context)) + "\n\nUser Query: " + user_query
 )
 
-print("\n" + response.text)  
+print("\n" + response.text)

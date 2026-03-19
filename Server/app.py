@@ -16,7 +16,6 @@ from dotenv import load_dotenv, find_dotenv
 from langchain_core.messages import HumanMessage
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 
 import os, sys, re, tempfile, uuid
@@ -199,27 +198,27 @@ async def upload_docs(
                 coll = collection_name_for(uid)
                 client = _make_qdrant_client()
 
-                # models/gemini-embedding-001 produces 3072-dim vectors.
+                # models/text-embedding-004 produces 768-dim vectors.
                 # Recreate collection only if it doesn't exist with correct config.
                 existing = [c.name for c in client.get_collections().collections]
                 if coll not in existing:
                     client.create_collection(
                         collection_name=coll,
-                        vectors_config=VectorParams(size=3072, distance=Distance.COSINE),
+                        vectors_config=VectorParams(size=768, distance=Distance.COSINE),
                     )
-                    print(f"[INDEX] Created collection '{coll}' with 3072-dim cosine vectors")
+                    print(f"[INDEX] Created collection '{coll}' with 768-dim cosine vectors")
                 else:
                     info = client.get_collection(coll)
                     existing_size = info.config.params.vectors.size if hasattr(info.config.params.vectors, 'size') else "unknown"
                     print(f"[INDEX] Collection '{coll}' already exists. Vector size: {existing_size}")
-                    if existing_size != 3072:
-                        print(f"[INDEX] ⚠️ DIMENSION MISMATCH: expected 3072, found {existing_size}. Recreating...")
+                    if existing_size != 768:
+                        print(f"[INDEX] ⚠️ DIMENSION MISMATCH: expected 768, found {existing_size}. Recreating...")
                         client.delete_collection(coll)
                         client.create_collection(
                             collection_name=coll,
-                            vectors_config=VectorParams(size=3072, distance=Distance.COSINE),
+                            vectors_config=VectorParams(size=768, distance=Distance.COSINE),
                         )
-                        print(f"[INDEX] Recreated collection '{coll}' with 3072-dim vectors")
+                        print(f"[INDEX] Recreated collection '{coll}' with 768-dim vectors")
 
                 QdrantVectorStore.from_documents(
                     documents=docs,
@@ -361,7 +360,7 @@ def _extract_query(payload: dict) -> str | None:
     return None
 
 @app.post("/chat/qa")
-async def stream_response(req: Request, user_id: str = Depends(verify_jwt)):
+async def stream_qa(req: Request, user_id: str = Depends(verify_jwt)):
     active_user_id.set(user_id)
     body = await req.json()
     query = (body or {}).get("query") or _extract_query(body)
@@ -369,23 +368,23 @@ async def stream_response(req: Request, user_id: str = Depends(verify_jwt)):
         raise HTTPException(status_code=400, detail="Missing 'query' in request body")
     async def generate():
         active_user_id.set(user_id)
-        from Agents.qa_agent import QAAgent
+        from Agents.multi_agent import rag_app_qa
         try:
-            async for event in QAAgent.astream_events(
-            {
-            "messages": [HumanMessage(content=query)],
-            },
+            async for event in rag_app_qa.astream_events(
+                {
+                    "messages": [HumanMessage(content=query)],
+                    "user_id": user_id
+                },
                 version="v2",
                 config={"configurable": {"user_id": user_id}},
             ):
                 kind = event["event"]
-
                 if kind == "on_chat_model_stream":
                     content = event["data"]["chunk"].content
                     if content:
                         yield content
-        
         except Exception as e:
+            print(f"[QA-ERROR] {str(e)}")
             yield f"\n\nError: {str(e)}"
     
     return StreamingResponse(
@@ -398,7 +397,7 @@ async def stream_response(req: Request, user_id: str = Depends(verify_jwt)):
     )
     
 @app.post("/chat/explain")
-async def stream_response(request: Request, user_id: str = Depends(verify_jwt)):
+async def stream_explain(request: Request, user_id: str = Depends(verify_jwt)):
     active_user_id.set(user_id)
     body = await request.json()
     query = (body or {}).get("query") or _extract_query(body)
@@ -406,21 +405,23 @@ async def stream_response(request: Request, user_id: str = Depends(verify_jwt)):
         raise HTTPException(status_code=400, detail="Missing 'query' in request body")
     async def generate():
         active_user_id.set(user_id)
-        from Agents.ex_agent import ExplanationAgent
+        from Agents.multi_agent import rag_app_ex
         try:
-            async for event in ExplanationAgent.astream_events(
-                {"messages": [HumanMessage(content=query)]},
+            async for event in rag_app_ex.astream_events(
+                {
+                    "messages": [HumanMessage(content=query)],
+                    "user_id": user_id
+                },
                 version="v2",
                 config={"configurable": {"user_id": user_id}},
             ):
                 kind = event["event"]
-                
                 if kind == "on_chat_model_stream":
                     content = event["data"]["chunk"].content
                     if content:
                         yield content
-        
         except Exception as e:
+            print(f"[EX-ERROR] {str(e)}")
             yield f"\n\nError: {str(e)}"
     
     return StreamingResponse(

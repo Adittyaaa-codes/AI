@@ -1,8 +1,9 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import create_agent
+from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain.tools import tool
 from langchain_tavily import TavilySearch
 from langchain_core.runnables import RunnableConfig
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 from dotenv import load_dotenv
 import os
@@ -11,10 +12,12 @@ from Utils.utility import get_vector_store_for
 
 load_dotenv()
 
+# Use a stable model name. gemini-1.5-flash is general purpose and fast.
 llm = ChatGoogleGenerativeAI(
-    model="gemini-flash-latest",
+    model="gemini-1.5-flash",
     google_api_key=os.getenv("GOOGLE_API_KEY"),
     streaming=True,
+    temperature=0,
 )
 
 @tool
@@ -22,11 +25,8 @@ def analyze_docs(query: str, config: RunnableConfig) -> str:
     """Analyze the user query, do similarity search and find relevant chunks from uploaded documents."""
     try:
         user_id = config.get("configurable", {}).get("user_id")
-        print(f"\n[EX-DEBUG] analyze_docs called | user_id={user_id} | query={query[:80]}")
-        
         vs = get_vector_store_for(user_id)
 
-        # Filter by user_id to ensure isolation between users
         search_filter = None
         if user_id:
             search_filter = Filter(
@@ -35,14 +35,6 @@ def analyze_docs(query: str, config: RunnableConfig) -> str:
 
         docs = vs.similarity_search(query=query, k=4, filter=search_filter)
 
-        print(f"[EX-DEBUG] Retrieved {len(docs)} chunks from collection for user_id={user_id}")
-        if docs:
-            print(f"[EX-DEBUG] Top chunk score (metadata): {docs[0].metadata.get('_relevance_score', 'N/A')}")
-            print(f"[EX-DEBUG] Top chunk payload keys: {list(docs[0].metadata.keys())}")
-            print(f"[EX-DEBUG] Top chunk preview: {docs[0].page_content[:120].replace(chr(10), ' ')}...")
-        else:
-            print(f"[EX-DEBUG] ⚠️ 0 results — collection may be empty, wrong name, or filter is too strict.")
-
         if not docs:
             return "No relevant study materials found in your uploaded documents."
 
@@ -50,11 +42,9 @@ def analyze_docs(query: str, config: RunnableConfig) -> str:
             f"Source: {doc.metadata.get('source', 'Unknown')}\n{doc.page_content}"
             for doc in docs
         ])
-        print(f"[EX-DEBUG] Context length being sent to LLM: {len(context)} chars")
         return context
 
     except Exception as e:
-        print(f"[EX-DEBUG] ❌ Error in analyze_docs: {str(e)}")
         return f"Could not search documents: {str(e)}. Try using web search instead."
 
 @tool
@@ -66,7 +56,6 @@ def get_available_sources(query: str, config: RunnableConfig) -> str:
         user_id = config.get("configurable", {}).get("user_id")
         client = _make_qdrant_client()
         coll = collection_name_for(user_id)
-        print(f"[EX-DEBUG] get_available_sources | collection={coll} | user_id={user_id}")
 
         records = client.scroll(
             collection_name=coll,
@@ -84,15 +73,12 @@ def get_available_sources(query: str, config: RunnableConfig) -> str:
                 if source:
                     sources.add(source)
 
-        print(f"[EX-DEBUG] Found {len(sources)} unique sources in collection")
-
         if not sources:
             return "No documents have been uploaded to your library yet."
 
         return "The following source materials are available in your library:\n- " + "\n- ".join(list(sources))
 
     except Exception as e:
-        print(f"[EX-DEBUG] ❌ Error in get_available_sources: {str(e)}")
         return f"Error retrieving source list: {str(e)}"
 
 @tool
@@ -104,8 +90,7 @@ def search_web_material(query: str) -> str:
     except Exception as e:
         return f"Web search failed: {str(e)}"
 
-
-web_search_template = """You are an expert ExplanationAgent that helps explain complex topics \
+system_prompt = """You are an expert ExplanationAgent that helps explain complex topics \
 in the easiest way possible so that a user without any prerequisite knowledge can understand easily.
 
 Your approach:
@@ -119,15 +104,19 @@ Your approach:
 
 IMPORTANT: Prioritize information from analyze_docs (uploaded documents) over web search."""
 
-ExplanationAgent = create_agent(
-    model=llm,
-    tools=[analyze_docs, get_available_sources, search_web_material],
-    system_prompt=web_search_template
-)
+prompt = ChatPromptTemplate.from_messages([
+    ("system", system_prompt),
+    MessagesPlaceholder(variable_name="messages"),
+    MessagesPlaceholder(variable_name="agent_scratchpad"),
+])
+
+tools = [analyze_docs, get_available_sources, search_web_material]
+agent = create_tool_calling_agent(llm, tools, prompt)
+ExplanationAgent = AgentExecutor(agent=agent, tools=tools, verbose=False)
 
 if __name__ == "__main__":
     user_query = input("Enter Your Query : ")
     response = ExplanationAgent.invoke({
         "messages": [("user", user_query)]
     })
-    print(response['messages'][-1].content)
+    print(response['output'])
