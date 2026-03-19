@@ -1,10 +1,8 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import AgentExecutor
-from langchain.agents.format_scratchpad import format_to_openai_tool_messages
-from langchain.agents.output_parsers import OpenAIToolsAgentOutputParser
 from langchain.tools import tool
 from langchain_tavily import TavilySearch
-from langchain_core.runnables import RunnableConfig, RunnablePassthrough
+from langchain_core.runnables import RunnableConfig
+from langgraph.prebuilt import create_react_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 from dotenv import load_dotenv
@@ -106,30 +104,13 @@ Your approach:
 
 IMPORTANT: Prioritize information from analyze_docs (uploaded documents) over web search."""
 
-prompt = ChatPromptTemplate.from_messages([
-    ("system", system_prompt),
-    MessagesPlaceholder(variable_name="messages"),
-    MessagesPlaceholder(variable_name="agent_scratchpad"),
-])
-
 tools = [analyze_docs, get_available_sources, search_web_material]
 
-# Manual creation of Tool-Calling agent to avoid missing create_tool_calling_agent
-llm_with_tools = llm.bind_tools(tools)
-agent = (
-    RunnablePassthrough.assign(
-        agent_scratchpad=lambda x: format_to_openai_tool_messages(x["intermediate_steps"])
-    )
-    | prompt
-    | llm_with_tools
-    | OpenAIToolsAgentOutputParser()
-)
-
-ExplanationAgent = AgentExecutor(agent=agent, tools=tools, verbose=False)
+ExplanationAgent = create_react_agent(llm, tools, state_modifier=system_prompt)
 
 if __name__ == "__main__":
     user_query = input("Enter Your Query : ")
     response = ExplanationAgent.invoke({
         "messages": [("user", user_query)]
     })
-    print(response['output'])
+    print(response["messages"][-1].content)

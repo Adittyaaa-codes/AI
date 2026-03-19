@@ -18,21 +18,23 @@ class AgentState(TypedDict, total=False):
 
 def explanation_node(state: AgentState):
     user_id = state.get("user_id")
-    # AgentExecutor.invoke returns a dict with 'output' string
+    # create_react_agent graph returns a dict with the full 'messages' list
     result = ExplanationAgent.invoke(
-        state,
+        {"messages": state.get("messages", [])},
         config={"configurable": {"user_id": user_id}},
     )
-    # Convert string output to AIMessage for LangGraph state
-    return {"messages": [AIMessage(content=result["output"])]}
+    # Extract only the newly generated messages (tool calls, tool responses, final answer) to avoid duplication
+    original_count = len(state.get("messages", []))
+    return {"messages": result["messages"][original_count:]}
 
 def qa_generation_node(state: AgentState):
     user_id = state.get("user_id")
     result = QAAgent.invoke(
-        state,
+        {"messages": state.get("messages", [])},
         config={"configurable": {"user_id": user_id}},
     )
-    return {"messages": [AIMessage(content=result["output"])]}
+    original_count = len(state.get("messages", []))
+    return {"messages": result["messages"][original_count:]}
 
 workflow_ex = StateGraph(AgentState)
 workflow_ex.add_node("explanation_agent", explanation_node)
