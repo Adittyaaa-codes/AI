@@ -23,14 +23,14 @@ active_user_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("act
 
 def embed_text(text: str, task_type: str) -> list[float]:
     if not text or not text.strip():
-        return [0.0] * 768
+        return [0.0] * 3072
     result = genai.embed_content(
-        model="models/text-embedding-004",
+        model="models/gemini-embedding-001",
         content=text,
         task_type=task_type
     )
     embedding = result["embedding"]
-    assert len(embedding) == 768, f"Dimension mismatch: expected 768, got {len(embedding)}"
+    assert len(embedding) == 3072, f"Dimension mismatch: expected 3072, got {len(embedding)}"
     return embedding
 
 def embed_texts(texts: list[str], task_type: str) -> list[list[float]]:
@@ -51,17 +51,17 @@ def embed_texts(texts: list[str], task_type: str) -> list[list[float]]:
 
     # AFTER
     result = genai.embed_content(
-        model="models/text-embedding-004",
+        model="models/gemini-embedding-001",
         content=processed_texts,
         task_type=task_type
     )
     embeddings = result["embeddings"]
 
     for i in indices_to_fill_zero:
-        embeddings[i] = [0.0] * 768
+        embeddings[i] = [0.0] * 3072
 
     for e in embeddings:
-        assert len(e) == 768, f"Dimension mismatch: expected 768, got {len(e)}"
+        assert len(e) == 3072, f"Dimension mismatch: expected 3072, got {len(e)}"
     return embeddings
 
 class GeminiEmbeddings(Embeddings):
