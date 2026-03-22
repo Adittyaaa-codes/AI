@@ -11,7 +11,7 @@ load_dotenv()
 
 from google import generativeai as genai
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-llm_model = genai.GenerativeModel("gemini-2.0-flash")
+llm_model = genai.GenerativeModel("gemini-2.5-flash")
 
 print("Connecting to Qdrant at:", os.getenv("QDRANT_URL"))
 print("Collection: discrete-mathematics")

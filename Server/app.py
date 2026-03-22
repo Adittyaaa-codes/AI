@@ -27,6 +27,7 @@ from langchain_core.documents import Document
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv(find_dotenv())
+print("--- STARTING AI SERVER WITH GEMINI-2.5-FLASH ---")
 
 from Agents.multi_agent import rag_app_ex, rag_app_qa
 from Utils.utility import (
@@ -168,14 +169,35 @@ async def upload_docs(
                         )
                         print(f"[INDEX] Recreated collection '{coll}' with 768-dim vectors")
 
-                QdrantVectorStore.from_documents(
-                    documents=docs,
-                    embedding=embedding_model,
-                    url=os.getenv("QDRANT_URL"),
-                    api_key=os.getenv("QDRANT_API_KEY"),
+                from qdrant_client.models import PointStruct
+                import uuid
+                from Utils.utility import embed_texts
+                
+                texts = [d.page_content for d in docs]
+                payloads = [{"text": d.page_content, **d.metadata} for d in docs]
+                embeddings = embed_texts(texts, "retrieval_document")
+                
+                points = [
+                    PointStruct(id=str(uuid.uuid4()), vector=e, payload=p)
+                    for e, p in zip(embeddings, payloads)
+                ]
+                
+                client.upload_points(
                     collection_name=coll,
-                    prefer_grpc=False,
+                    points=points
                 )
+                
+                # STEP 1 — VERIFY INDEXING
+                points_count = client.count(collection_name=coll).count
+                print(f"[INDEX-DIAGNOSTIC] Total points in collection {coll}: {points_count}")
+                if points_count > 0:
+                    scroll_result = client.scroll(collection_name=coll, limit=1, with_payload=True)
+                    records = scroll_result[0]
+                    if records:
+                        print(f"[INDEX-DIAGNOSTIC] First point payload: {records[0].payload}")
+                else:
+                    print(f"[INDEX-DIAGNOSTIC] ❌ CRITICAL: Upsert yielded 0 points!")
+                
                 print(f"✅ Successfully indexed {len(docs)} chunks for user {uid} into collection '{coll}'")
             except Exception as e:
                 import traceback
@@ -197,6 +219,7 @@ async def list_documents(user_id: str = Depends(verify_jwt)):
     """List all unique source documents in the collection"""
     try:
         from qdrant_client import QdrantClient
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
         
         client = QdrantClient(url=os.getenv("QDRANT_URL"), api_key=os.getenv("QDRANT_API_KEY"))
         
@@ -207,7 +230,7 @@ async def list_documents(user_id: str = Depends(verify_jwt)):
             scroll_filter=Filter(
                 must=[
                     FieldCondition(
-                        key="metadata.user_id",
+                        key="user_id",
                         match=MatchValue(value=user_id)
                     )
                 ]
@@ -216,8 +239,8 @@ async def list_documents(user_id: str = Depends(verify_jwt)):
         
         sources = set()
         for record in records[0]:
-            if record.payload and 'metadata' in record.payload:
-                source = record.payload['metadata'].get('source')
+            if record.payload:
+                source = record.payload.get('source')
                 if source:
                     sources.add(source)
         
@@ -256,11 +279,11 @@ async def delete_document(
                 filter=models.Filter(
                     must=[
                         models.FieldCondition(
-                            key="metadata.source",
+                            key="source",
                             match=models.MatchValue(value=filename)
                         ),
                         models.FieldCondition(
-                            key="metadata.user_id",
+                            key="user_id",
                             match=models.MatchValue(value=user_id)
                         ),
                     ]
@@ -296,26 +319,64 @@ async def stream_qa(req: Request, user_id: str = Depends(verify_jwt)):
     if not query:
         raise HTTPException(status_code=400, detail="Missing 'query' in request body")
     async def generate():
-        active_user_id.set(user_id)
-        from Agents.multi_agent import rag_app_qa
         try:
-            async for event in rag_app_qa.astream_events(
-                {
-                    "messages": [HumanMessage(content=query)],
-                    "user_id": user_id
-                },
-                version="v2",
-                config={"configurable": {"user_id": user_id}},
-            ):
-                kind = event["event"]
-                if kind == "on_chat_model_stream":
-                    content = event["data"]["chunk"].content
-                    if content:
-                        yield content
+            from Utils.utility import _make_qdrant_client, collection_name_for, embed_text
+            import google.generativeai as genai
+            import os
+            import json
+            
+            client = _make_qdrant_client()
+            coll = collection_name_for(user_id)
+            query_vector = embed_text(query, "retrieval_query")
+            
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            search_filter = Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=user_id))])
+            
+            try:
+                results = client.query_points(
+                    collection_name=coll,
+                    query=query_vector,
+                    query_filter=search_filter,
+                    limit=4,
+                    with_payload=True
+                ).points
+            except Exception as e:
+                results = []
+                
+            print(f"Number of results returned: {len(results)}")
+            if results:
+                print(f"Score of top result: {results[0].score}")
+                print(f"First 100 characters of top result payload text: {results[0].payload.get('text', '')[:100]}")
+            
+            # STEP 4 — VERIFY CONTEXT INJECTION (PART 1)
+            print(f"[CHAT-DIAGNOSTIC] Chunks retrieved: {len(results)}")
+            
+            if not len(results):
+                context_str = "No relevant context found."
+            else:
+                chunks = [r.payload["text"] for r in results if r.payload and "text" in r.payload]
+                context_str = "\n\n".join(chunks)
+                
+            # STEP 4 — VERIFY CONTEXT INJECTION (PART 2)
+            print(f"[CHAT-DIAGNOSTIC] Full context string: {context_str[:500]}...")
+            prompt = f"Context:\n{context_str}\n\nAnswer the following Question: {query}"
+            print(f"[CHAT-DIAGNOSTIC] Final prompt: {prompt[:500]}...")
+            
+            genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+            model = genai.GenerativeModel("gemini-2.5-flash")
+            
+            # Since the frontend uses simple string concatenation (aiText += chunk), 
+            # we just yield the exact text chunks to match their current logic.
+            response = model.generate_content(prompt, stream=True)
+            for chunk in response:
+                if chunk.text:
+                    yield chunk.text
+                    
         except Exception as e:
-            print(f"[QA-ERROR] {str(e)}")
+            import traceback
+            traceback.print_exc()
             yield f"\n\nError: {str(e)}"
-    
+            
     return StreamingResponse(
         generate(),
         media_type="text/plain",
@@ -332,32 +393,71 @@ async def stream_explain(request: Request, user_id: str = Depends(verify_jwt)):
     query = (body or {}).get("query") or _extract_query(body)
     if not query:
         raise HTTPException(status_code=400, detail="Missing 'query' in request body")
+        
     async def generate():
-        active_user_id.set(user_id)
-        from Agents.multi_agent import rag_app_ex
         try:
-            async for event in rag_app_ex.astream_events(
-                {
-                    "messages": [HumanMessage(content=query)],
-                    "user_id": user_id
-                },
-                version="v2",
-                config={"configurable": {"user_id": user_id}},
-            ):
-                kind = event["event"]
-                if kind == "on_chat_model_stream":
-                    content = event["data"]["chunk"].content
-                    if content:
-                        yield content
+            from Utils.utility import _make_qdrant_client, collection_name_for, embed_text
+            import google.generativeai as genai
+            import os
+            import json
+            
+            client = _make_qdrant_client()
+            coll = collection_name_for(user_id)
+            query_vector = embed_text(query, "retrieval_query")
+            
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            search_filter = Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=user_id))])
+            
+            try:
+                results = client.query_points(
+                    collection_name=coll,
+                    query=query_vector,
+                    query_filter=search_filter,
+                    limit=4,
+                    with_payload=True
+                ).points
+            except Exception as e:
+                results = []
+                
+            print(f"Number of results returned: {len(results)}")
+            if results:
+                print(f"Score of top result: {results[0].score}")
+                print(f"First 100 characters of top result payload text: {results[0].payload.get('text', '')[:100]}")
+            
+            # STEP 4 — VERIFY CONTEXT INJECTION (PART 1)
+            print(f"[EXPLAIN-DIAGNOSTIC] Chunks retrieved: {len(results)}")
+            
+            if not len(results):
+                context_str = "No relevant context found."
+            else:
+                chunks = [r.payload["text"] for r in results if r.payload and "text" in r.payload]
+                context_str = "\n\n".join(chunks)
+                
+            # STEP 4 — VERIFY CONTEXT INJECTION (PART 2)
+            print(f"[EXPLAIN-DIAGNOSTIC] Full context string: {context_str[:500]}...")
+            prompt = f"Context:\n{context_str}\n\nExplain the following Question clearly: {query}"
+            print(f"[EXPLAIN-DIAGNOSTIC] Final prompt: {prompt[:500]}...")
+            
+            genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+            model = genai.GenerativeModel("gemini-2.5-flash")
+            
+            # Since the frontend uses simple string concatenation (aiText += chunk), 
+            # we just yield the exact text chunks to match their current logic.
+            response = model.generate_content(prompt, stream=True)
+            for chunk in response:
+                if chunk.text:
+                    yield chunk.text
+                    
         except Exception as e:
-            print(f"[EX-ERROR] {str(e)}")
+            import traceback
+            traceback.print_exc()
             yield f"\n\nError: {str(e)}"
-    
+            
     return StreamingResponse(
-        generate(),
-        media_type="text/plain",
+        generate(), 
+        media_type="text/plain", 
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache", 
             "X-Accel-Buffering": "no"
         }
     )
@@ -367,8 +467,8 @@ if __name__ == "__main__":
     
     uvicorn.run(
         "app:app",
-        host="localhost",
+        host="127.0.0.1",
         port=8000,
-        reload=True,
+        reload=False,
         log_level="info"
     )

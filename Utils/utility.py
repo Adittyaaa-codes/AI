@@ -22,14 +22,8 @@ genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 active_user_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("active_user_id", default=None)
 
 def embed_text(text: str, task_type: str) -> list[float]:
-    """
-    Generate embeddings using Google Gemini's text-embedding-004 model.
-    task_type should be "retrieval_document" for indexing and "retrieval_query" for search.
-    """
     if not text or not text.strip():
-        # Return zero vector if text is empty to avoid API errors
         return [0.0] * 768
-        
     result = genai.embed_content(
         model="models/text-embedding-004",
         content=text,
@@ -44,14 +38,28 @@ def embed_texts(texts: list[str], task_type: str) -> list[list[float]]:
     if not texts:
         return []
     
-    # Handle potentially large batches by splitting if necessary, 
-    # though genai.embed_content usually handles reasonable lists.
+    # Handle empty strings within the batch by replacing them with a zero vector
+    # This avoids API errors for empty content while still processing the batch
+    processed_texts = []
+    indices_to_fill_zero = []
+    for i, t in enumerate(texts):
+        if not t or not t.strip():
+            indices_to_fill_zero.append(i)
+            processed_texts.append(" ") # Replace with a non-empty string for the API call
+        else:
+            processed_texts.append(t)
+
+    # AFTER
     result = genai.embed_content(
         model="models/text-embedding-004",
-        content=texts,
+        content=processed_texts,
         task_type=task_type
     )
     embeddings = result["embeddings"]
+
+    for i in indices_to_fill_zero:
+        embeddings[i] = [0.0] * 768
+
     for e in embeddings:
         assert len(e) == 768, f"Dimension mismatch: expected 768, got {len(e)}"
     return embeddings

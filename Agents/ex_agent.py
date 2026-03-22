@@ -14,7 +14,7 @@ load_dotenv()
 
 # Fixed stable model for Gemini AI Studio.
 llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash",
+    model="gemini-2.5-flash",
     google_api_key=os.getenv("GOOGLE_API_KEY"),
     streaming=True,
     temperature=0,
@@ -30,7 +30,7 @@ def analyze_docs(query: str, config: RunnableConfig) -> str:
         search_filter = None
         if user_id:
             search_filter = Filter(
-                must=[FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id))]
+                must=[FieldCondition(key="user_id", match=MatchValue(value=user_id))]
             )
 
         docs = vs.similarity_search(query=query, k=4, filter=search_filter)
@@ -62,14 +62,14 @@ def get_available_sources(query: str, config: RunnableConfig) -> str:
             limit=100,
             with_payload=True,
             scroll_filter=Filter(
-                must=[FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id))]
+                must=[FieldCondition(key="user_id", match=MatchValue(value=user_id))]
             ) if user_id else None
         )
 
         sources = set()
         for record in records[0]:
-            if record.payload and 'metadata' in record.payload:
-                source = record.payload['metadata'].get('source')
+            if record.payload:
+                source = record.payload.get('source')
                 if source:
                     sources.add(source)
 
