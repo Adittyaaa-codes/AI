@@ -2,12 +2,17 @@ import re
 import os
 import contextvars
 import google.generativeai as genai
-from fastapi import Security
-from fastapi.security import APIKeyHeader
+import jwt
+from fastapi import Security, HTTPException
+from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredentials
+auth_scheme = HTTPBearer(auto_error=True)
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from dotenv import load_dotenv
 from langchain_core.embeddings import Embeddings
+from langchain_core.documents import Document
+from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 load_dotenv()
 
@@ -91,3 +96,81 @@ def get_vector_store_for(user_id: str | None = None) -> QdrantVectorStore:
         collection_name=collection_name_for(effective_user_id),
         embedding=embedding_model,
     )
+
+def verify_jwt(credentials: HTTPAuthorizationCredentials = Security(auth_scheme)) -> str:
+    """Validate JWT from Authorization: Bearer <token> and return user identifier.
+
+    Supports common claim keys: 'user_id', '_id', 'sub', or 'id'.
+    """
+    token = credentials.credentials
+    try:
+        secret = os.getenv("JWT_SECRET") or os.getenv("ACCESS_SECRET_KEY")
+        if not secret:
+            raise HTTPException(status_code=500, detail="JWT secret not configured")
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256"],
+        )
+        user_id = (
+            payload.get("user_id")
+            or payload.get("_id")
+            or payload.get("sub")
+            or payload.get("id")
+        )
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User id not found in token")
+        return str(user_id)
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+def _load_file_to_docs(path: str) -> list[Document]:
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".pdf":
+        loader = PyPDFLoader(path)
+        docs = loader.load()
+    elif ext in [".docx", ".doc"]:
+        loader = Docx2txtLoader(path)
+        docs = loader.load()
+    else:
+        loader = TextLoader(path, encoding="utf-8")
+        docs = loader.load()
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=150)
+    return splitter.split_documents(docs)
+
+def _unique_save_path(base_dir: str, filename: str) -> str:
+    name, ext = os.path.splitext(filename)
+    candidate = os.path.join(base_dir, filename)
+    i = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(base_dir, f"{name} ({i}){ext}")
+        i += 1
+    return candidate
+
+def _extract_query(payload: dict) -> str | None:
+    msgs = (payload or {}).get("messages") or []
+    for m in reversed(msgs):
+        if m.get("role") != "user":
+            continue
+        parts = m.get("parts")
+        if isinstance(parts, list):
+            texts = [p.get("text") for p in parts if isinstance(p, dict) and p.get("type") == "text" and p.get("text")]
+            if texts:
+                return "".join(texts).strip()
+        content = m.get("content")
+        if isinstance(content, list):
+            texts = [p.get("text") for p in content if isinstance(p, dict) and p.get("type") == "text" and p.get("text")]
+            if texts:
+                return "".join(texts).strip()
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        if isinstance(m.get("text"), str) and m["text"].strip():
+            return m["text"].strip()
+    return None
+
+def clean_text(text: str) -> str:
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'\s+([.,!?;:])', r'\1', text)
+    text = re.sub(r'(\w+)-\s+(\w+)', r'\1\2', text)
+    return text.strip()
+    

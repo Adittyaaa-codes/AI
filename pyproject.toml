@@ -8,6 +8,7 @@ dependencies = [
     "faiss-cpu>=1.13.2",
     "fastapi>=0.128.0",
     "google-genai>=1.56.0",
+    "google-generativeai>=0.8.0",
     "ipykernel>=6.29.5",
     "ipython>=8.20.0",
     "langchain>=1.2.0",

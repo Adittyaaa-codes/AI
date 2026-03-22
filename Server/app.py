@@ -18,30 +18,29 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2t
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_qdrant import QdrantVectorStore
 
-import os, sys, re, tempfile, uuid
 from fastapi import Header,Depends, Security
 from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredentials
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 from langchain_core.documents import Document
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Load environment variables from nearest .env file (searches upward)
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv(find_dotenv())
 
 from Agents.multi_agent import rag_app_ex, rag_app_qa
-from Utils.utility import get_user_id, collection_name_for, embedding_model, active_user_id
-
-def clean_text(text: str) -> str:
-    """Clean PDF text by removing extra whitespace and newlines"""
-    # Remove multiple spaces
-    text = re.sub(r'\s+', ' ', text)
-    # Remove space before punctuation
-    text = re.sub(r'\s+([.,!?;:])', r'\1', text)
-    # Fix hyphenated words split across lines
-    text = re.sub(r'(\w+)-\s+(\w+)', r'\1\2', text)
-    return text.strip()
+from Utils.utility import (
+    get_user_id, 
+    collection_name_for, 
+    embedding_model, 
+    active_user_id, 
+    _load_file_to_docs, 
+    _unique_save_path, 
+    _extract_query, 
+    verify_jwt, 
+    clean_text,
+    auth_scheme
+)
 
 app = FastAPI(
     title="RAG Multi-Agent API",
@@ -74,34 +73,6 @@ class IndexTextRequest(BaseModel):
     text: str
     doc_id: str | None = None
 
-auth_scheme = HTTPBearer(auto_error=True)
-
-def verify_jwt(credentials: HTTPAuthorizationCredentials = Security(auth_scheme)) -> str:
-    """Validate JWT from Authorization: Bearer <token> and return user identifier.
-
-    Supports common claim keys: 'user_id', '_id', 'sub', or 'id'.
-    """
-    token = credentials.credentials
-    try:
-        secret = os.getenv("JWT_SECRET") or os.getenv("ACCESS_SECRET_KEY")
-        if not secret:
-            raise HTTPException(status_code=500, detail="JWT secret not configured")
-        payload = jwt.decode(
-            token,
-            secret,
-            algorithms=["HS256"],
-        )
-        user_id = (
-            payload.get("user_id")
-            or payload.get("_id")
-            or payload.get("sub")
-            or payload.get("id")
-        )
-        if not user_id:
-            raise HTTPException(status_code=401, detail="User id not found in token")
-        return str(user_id)
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
 
 
 @app.get("/")
@@ -112,34 +83,11 @@ async def root():
         "version": "1.0.0"
     }
 
-def _load_file_to_docs(path: str) -> list[Document]:
-    ext = os.path.splitext(path)[1].lower()
-    if ext == ".pdf":
-        loader = PyPDFLoader(path)
-        docs = loader.load()
-    elif ext in [".docx", ".doc"]:
-        loader = Docx2txtLoader(path)
-        docs = loader.load()
-    else:
-        loader = TextLoader(path, encoding="utf-8")
-        docs = loader.load()
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=150)
-    return splitter.split_documents(docs)
-
-def _unique_save_path(base_dir: str, filename: str) -> str:
-    name, ext = os.path.splitext(filename)
-    candidate = os.path.join(base_dir, filename)
-    i = 1
-    while os.path.exists(candidate):
-        candidate = os.path.join(base_dir, f"{name} ({i}){ext}")
-        i += 1
-    return candidate
-
 @app.post("/upload_docs", response_model=UploadResponse)
 async def upload_docs(
     files: List[UploadFile] = File(...), 
     subject: str = Form(...),
-    chapter: str = Form(None),
+    chapter: str = Form(...),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     user_id: str = Depends(verify_jwt)
 ):
@@ -338,26 +286,7 @@ async def delete_document(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def _extract_query(payload: dict) -> str | None:
-    msgs = (payload or {}).get("messages") or []
-    for m in reversed(msgs):
-        if m.get("role") != "user":
-            continue
-        parts = m.get("parts")
-        if isinstance(parts, list):
-            texts = [p.get("text") for p in parts if isinstance(p, dict) and p.get("type") == "text" and p.get("text")]
-            if texts:
-                return "".join(texts).strip()
-        content = m.get("content")
-        if isinstance(content, list):
-            texts = [p.get("text") for p in content if isinstance(p, dict) and p.get("type") == "text" and p.get("text")]
-            if texts:
-                return "".join(texts).strip()
-        if isinstance(content, str) and content.strip():
-            return content.strip()
-        if isinstance(m.get("text"), str) and m["text"].strip():
-            return m["text"].strip()
-    return None
+
 
 @app.post("/chat/qa")
 async def stream_qa(req: Request, user_id: str = Depends(verify_jwt)):
@@ -432,106 +361,6 @@ async def stream_explain(request: Request, user_id: str = Depends(verify_jwt)):
             "X-Accel-Buffering": "no"
         }
     )
-   
-from typing import Optional 
-import yt_dlp
-from youtube_transcript_api import YouTubeTranscriptApi
-    
-class SummaryRequest(BaseModel):
-    youtube_url: str
-    summary_length: Optional[str] = "short"  # "short", "medium", "detailed"
-
-class SummaryResponse(BaseModel):
-    video_title: str
-    video_duration: int
-    summary: str
-    key_points: list[str]
-    keywords: list[str]
-
-@app.post("/summarize", response_model=SummaryResponse)
-async def summarize_video(request: SummaryRequest, user_id: str = Depends(verify_jwt)):
-    try:
-
-        video_id = extract_video_id(request.youtube_url)
-
-        transcript = get_transcript(video_id)
-        if not transcript:
-            raise HTTPException(400, "No transcript available")
-
-        metadata = get_video_metadata(request.youtube_url)
-
-        summary = generate_summary(transcript, metadata["title"], request.summary_length)
-        
-        return SummaryResponse(
-            video_title=metadata["title"],
-            video_duration=metadata["duration"],
-            summary=summary["summary"],
-            key_points=summary["key_points"],
-            keywords=summary["keywords"]
-        )
-        
-    except Exception as e:
-        raise HTTPException(500, f"Summarization failed: {str(e)}")
-
-def extract_video_id(url: str) -> str:
-    """Extract YouTube video ID from URL"""
-    ydl_opts = {'quiet': True}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        return info['id']
-
-def get_transcript(video_id: str) -> str:
-    """Get YouTube transcript"""
-    try:
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-        return " ".join([t['text'] for t in transcript_list])
-    except:
-        return ""
-
-def get_video_metadata(url: str) -> dict:
-    """Get video title, duration"""
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        return {
-            "title": info.get('title', 'Unknown'),
-            "duration": info.get('duration', 0)
-        }
-
-def generate_summary(transcript: str, title: str, length: str = "short") -> dict:
-    """Generate AI summary using OpenAI/Groq"""
-    
-    prompt = f"""
-    Summarize this YouTube video transcript: "{title}"
-    
-    Transcript: {transcript[:8000]}...  # Truncate for token limits
-    
-    Provide:
-    1. SUMMARY ({length.upper()} version)
-    2. KEY POINTS (bullet list, 5-8 items)
-    3. KEYWORDS (5-10 most important)
-    
-    JSON format only:
-    {{
-      "summary": "...",
-      "key_points": ["point1", "point2"],
-      "keywords": ["kw1", "kw2"]
-    }}
-    """
-    
-    response = openai.ChatCompletion.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-        max_tokens=1000
-    )
-    
-    import json
-    return json.loads(response.choices[0].message.content)
-
 
 if __name__ == "__main__":
     import uvicorn

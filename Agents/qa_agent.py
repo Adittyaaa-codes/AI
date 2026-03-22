@@ -108,7 +108,7 @@ IMPORTANT: Prioritize information from analyze_docs (uploaded documents) first."
 
 tools = [analyze_docs, get_available_sources, ques_generator]
 
-QAAgent = create_react_agent(llm, tools, state_modifier=system_prompt)
+QAAgent = create_react_agent(llm, tools, prompt=system_prompt)
 
 if __name__ == "__main__":
     user_query = input("On which topic you want questions: ")

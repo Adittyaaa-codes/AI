@@ -106,7 +106,7 @@ IMPORTANT: Prioritize information from analyze_docs (uploaded documents) over we
 
 tools = [analyze_docs, get_available_sources, search_web_material]
 
-ExplanationAgent = create_react_agent(llm, tools, state_modifier=system_prompt)
+ExplanationAgent = create_react_agent(llm, tools, prompt=system_prompt)
 
 if __name__ == "__main__":
     user_query = input("Enter Your Query : ")
