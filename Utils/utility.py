@@ -77,9 +77,14 @@ def collection_name_for(user_id: str | None) -> str:
     return f"user_{safe}_docs"
 
 def _make_qdrant_client() -> QdrantClient:
+    url = os.getenv("QDRANT_URL")
+    api_key = os.getenv("QDRANT_API_KEY")
+    assert url is not None, "QDRANT_URL environment variable is not set"
+    assert api_key is not None, "QDRANT_API_KEY environment variable is not set"
+    print(f"[STARTUP] Initializing QdrantClient connecting to: {url}")
     return QdrantClient(
-        url=os.getenv("QDRANT_URL"),
-        api_key=os.getenv("QDRANT_API_KEY"),
+        url=url,
+        api_key=api_key,
         prefer_grpc=False,
         timeout=60,  # Increased timeout for production stability
     )

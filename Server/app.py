@@ -145,27 +145,27 @@ async def upload_docs(
                 coll = collection_name_for(uid)
                 client = _make_qdrant_client()
 
-                # gemini-embedding-001 produces 3072-dim vectors.
+                # models/text-embedding-004 produces 768-dim vectors.
                 # Recreate collection only if it doesn't exist with correct config.
                 existing = [c.name for c in client.get_collections().collections]
                 if coll not in existing:
                     client.create_collection(
                         collection_name=coll,
-                        vectors_config=VectorParams(size=3072, distance=Distance.COSINE),
+                        vectors_config=VectorParams(size=768, distance=Distance.COSINE),
                     )
-                    print(f"[INDEX] Created collection '{coll}' with 3072-dim cosine vectors")
+                    print(f"[INDEX] Created collection '{coll}' with 768-dim cosine vectors")
                 else:
                     info = client.get_collection(coll)
                     existing_size = info.config.params.vectors.size if hasattr(info.config.params.vectors, 'size') else "unknown"
                     print(f"[INDEX] Collection '{coll}' already exists. Vector size: {existing_size}")
-                    if existing_size != 3072:
-                        print(f"[INDEX] ⚠️ DIMENSION MISMATCH: expected 3072, found {existing_size}. Recreating...")
+                    if existing_size != 768:
+                        print(f"[INDEX] ⚠️ DIMENSION MISMATCH: expected 768, found {existing_size}. Recreating...")
                         client.delete_collection(coll)
                         client.create_collection(
                             collection_name=coll,
-                            vectors_config=VectorParams(size=3072, distance=Distance.COSINE),
+                            vectors_config=VectorParams(size=768, distance=Distance.COSINE),
                         )
-                        print(f"[INDEX] Recreated collection '{coll}' with 3072-dim vectors")
+                        print(f"[INDEX] Recreated collection '{coll}' with 768-dim vectors")
 
                 from qdrant_client.models import PointStruct
                 import uuid
@@ -341,24 +341,21 @@ async def stream_qa(req: Request, user_id: str = Depends(verify_jwt)):
             except Exception as e:
                 results = []
                 
-            print(f"Number of results returned: {len(results)}")
-            if results:
-                print(f"Score of top result: {results[0].score}")
-                print(f"First 100 characters of top result payload text: {results[0].payload.get('text', '')[:100]}")
-            
-            # STEP 4 — VERIFY CONTEXT INJECTION (PART 1)
-            print(f"[CHAT-DIAGNOSTIC] Chunks retrieved: {len(results)}")
-            
             if not len(results):
                 context_str = "No relevant context found."
             else:
                 chunks = [r.payload["text"] for r in results if r.payload and "text" in r.payload]
                 context_str = "\n\n".join(chunks)
                 
-            # STEP 4 — VERIFY CONTEXT INJECTION (PART 2)
-            print(f"[CHAT-DIAGNOSTIC] Full context string: {context_str[:500]}...")
-            prompt = f"Context:\n{context_str}\n\nAnswer the following Question: {query}"
-            print(f"[CHAT-DIAGNOSTIC] Final prompt: {prompt[:500]}...")
+            print(f"[RETRIEVAL] Query: {query[:100]}")
+            print(f"[RETRIEVAL] Filter: {search_filter}")
+            print(f"[RETRIEVAL] Results count: {len(results)}")
+            if results:
+                print(f"[RETRIEVAL] Top score: {results[0].score}")
+                print(f"[RETRIEVAL] Top chunk preview: {results[0].payload.get('text', '')[:200]}")
+            print(f"[RETRIEVAL] Context being sent to LLM: {context_str[:300]}")
+
+            prompt = f"Context:\n{context_str}\n\nAnswer this question: {query}"
             
             genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
             model = genai.GenerativeModel("gemini-2.5-flash")
@@ -417,24 +414,21 @@ async def stream_explain(request: Request, user_id: str = Depends(verify_jwt)):
             except Exception as e:
                 results = []
                 
-            print(f"Number of results returned: {len(results)}")
-            if results:
-                print(f"Score of top result: {results[0].score}")
-                print(f"First 100 characters of top result payload text: {results[0].payload.get('text', '')[:100]}")
-            
-            # STEP 4 — VERIFY CONTEXT INJECTION (PART 1)
-            print(f"[EXPLAIN-DIAGNOSTIC] Chunks retrieved: {len(results)}")
-            
             if not len(results):
                 context_str = "No relevant context found."
             else:
                 chunks = [r.payload["text"] for r in results if r.payload and "text" in r.payload]
                 context_str = "\n\n".join(chunks)
                 
-            # STEP 4 — VERIFY CONTEXT INJECTION (PART 2)
-            print(f"[EXPLAIN-DIAGNOSTIC] Full context string: {context_str[:500]}...")
+            print(f"[RETRIEVAL] Query: {query[:100]}")
+            print(f"[RETRIEVAL] Filter: {search_filter}")
+            print(f"[RETRIEVAL] Results count: {len(results)}")
+            if results:
+                print(f"[RETRIEVAL] Top score: {results[0].score}")
+                print(f"[RETRIEVAL] Top chunk preview: {results[0].payload.get('text', '')[:200]}")
+            print(f"[RETRIEVAL] Context being sent to LLM: {context_str[:300]}")
+
             prompt = f"Context:\n{context_str}\n\nExplain the following Question clearly: {query}"
-            print(f"[EXPLAIN-DIAGNOSTIC] Final prompt: {prompt[:500]}...")
             
             genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
             model = genai.GenerativeModel("gemini-2.5-flash")
