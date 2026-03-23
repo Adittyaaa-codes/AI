@@ -34,34 +34,22 @@ def embed_text(text: str, task_type: str) -> list[float]:
     return embedding
 
 def embed_texts(texts: list[str], task_type: str) -> list[list[float]]:
-    """Batch version of embed_text to avoid sequential API calls."""
     if not texts:
         return []
-    
-    # Handle empty strings within the batch by replacing them with a zero vector
-    # This avoids API errors for empty content while still processing the batch
-    processed_texts = []
-    indices_to_fill_zero = []
-    for i, t in enumerate(texts):
-        if not t or not t.strip():
-            indices_to_fill_zero.append(i)
-            processed_texts.append(" ") # Replace with a non-empty string for the API call
-        else:
-            processed_texts.append(t)
 
-    # AFTER
+    processed = [t if t and t.strip() else " " for t in texts]
+
     result = genai.embed_content(
-        model="models/gemini-embedding-001",
-        content=processed_texts,
+        model="models/text-embedding-004",
+        content=processed,
         task_type=task_type
     )
+
     embeddings = result["embeddings"]
 
-    for i in indices_to_fill_zero:
-        embeddings[i] = [0.0] * 3072
-
     for e in embeddings:
-        assert len(e) == 3072, f"Dimension mismatch: expected 3072, got {len(e)}"
+        assert len(e) == 768, f"Expected 768, got {len(e)}"
+
     return embeddings
 
 class GeminiEmbeddings(Embeddings):

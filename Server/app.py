@@ -74,8 +74,6 @@ class IndexTextRequest(BaseModel):
     text: str
     doc_id: str | None = None
 
-
-
 @app.get("/")
 async def root():
     return {
